@@ -255,3 +255,33 @@ def render_pages(
         return written
     finally:
         document.close()
+
+
+SHINGLE_WORDS = 8
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _shingles(text: str, size: int) -> set[tuple[str, ...]]:
+    words = _WORD.findall(text.lower())
+    return {tuple(words[i : i + size]) for i in range(len(words) - size + 1)}
+
+
+def copied_phrases(
+    text: str, extracts: Iterable[ReferenceExtract], *, size: int = SHINGLE_WORDS
+) -> list[tuple[str, str]]:
+    """Runs of ``size`` consecutive words that ``text`` shares with any reference heading or
+    caption, as ``(file_name, phrase)`` pairs. Used to check principle 9 (no copied text).
+
+    Only headings and captions are compared, since those are all the extracts hold. An empty
+    result is evidence, not proof, that no text was copied.
+    """
+    ours = _shingles(text, size)
+    found: set[tuple[str, str]] = set()
+    for extract in extracts:
+        pieces = [h.title for h in extract.headings] + [
+            f"{c.label} {c.text}" for c in extract.captions
+        ]
+        for piece in pieces:
+            for shingle in _shingles(piece, size) & ours:
+                found.add((extract.file_name, " ".join(shingle)))
+    return sorted(found)

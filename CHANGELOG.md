@@ -4,6 +4,25 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added: Phase 3, patent data ingestion
+- Content-addressed raw payload store on S3/MinIO: payloads are never overwritten, and
+  every read is hash-verified.
+- Lookup batches. Each item's raw record, documents or quarantine entry, and outcome commit
+  together. Batches reconcile (requested = stored + quarantined + not found + invalid),
+  count mismatches fail loudly, failed items are resumable, and start and finish are
+  audit-logged.
+- Google Patents page adapter (lookup by number):
+  * reads the original-language page's microdata;
+  * stores office text only (OCR and machine translations are recorded as `unparseable`);
+  * maps legal status through a fixed table, keeping the raw text;
+  * polite rate limit and bounded retries;
+  * refuses redirects outside `/patent/`.
+- Migration 0003: `ingest_item` (append-only) and the `active` legal-status category.
+- `plr ingest lookup` / `plr ingest resume`, the `data_sources` config section, and ADR 0007.
+- Contract tests on six real recorded pages. A real ingest of 10 numbers reconciled 100%
+  (8 stored, 1 not found, 1 invalid, 1 duplicate ignored).
+
+
 ### Added: Phase 2, data model, provenance, fact store, audit log, model gateway
 - **Canonical `PatentDocument`:**
   * every field has a value or an explicit missing reason;

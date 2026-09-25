@@ -28,9 +28,9 @@ from patsquire_plr.gateway.providers.base import (
     Message,
     ProviderAdapter,
 )
-from patsquire_plr.gateway.ratelimit import RateLimiter
 from patsquire_plr.gateway.secrets import SecretResolver
 from patsquire_plr.gateway.store import CallRecord
+from patsquire_plr.ratelimit import RateLimiter
 from tests.support import base_models_config
 
 # ---------------------------------------------------------------- test doubles (TEST-ONLY)

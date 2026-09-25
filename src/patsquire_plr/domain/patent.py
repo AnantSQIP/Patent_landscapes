@@ -145,7 +145,15 @@ class CitedReference(_Strict):
 
 class LegalStatus(_Strict):
     category: Literal[
-        "pending", "granted", "lapsed", "expired", "withdrawn", "refused", "revoked", "other"
+        "pending",
+        "granted",
+        "active",  # granted and in force
+        "lapsed",
+        "expired",
+        "withdrawn",
+        "refused",
+        "revoked",
+        "other",
     ]
     status_raw: str = Field(min_length=1, description="the source's own wording, kept verbatim")
     as_of: date

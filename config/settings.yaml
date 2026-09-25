@@ -54,3 +54,13 @@ models:
       {backend: local_ollama, model: "qwen2.5:0.5b", max_output_tokens: 2048, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
     critic:
       {backend: local_ollama, model: "qwen2.5:0.5b", max_output_tokens: 1024, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
+
+# Patent data sources (build prompt §6, ADR 0005). A report run names the source IDs to use.
+data_sources:
+  google_patents:
+    type: google_patents_page
+    base_url: https://patents.google.com
+    user_agent: "patsquire-plr/0.1 (patent landscape research)"
+    requests_per_minute: 20
+    timeout_s: 30
+    max_retries: 2

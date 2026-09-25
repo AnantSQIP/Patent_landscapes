@@ -1,4 +1,5 @@
-"""Per-backend request rate limiting (token bucket, thread-safe, in-process)."""
+"""Request rate limiting (token bucket, thread-safe, in-process), shared by the model
+gateway and the patent data sources."""
 
 from __future__ import annotations
 

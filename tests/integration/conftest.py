@@ -6,13 +6,23 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 
+import boto3
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import URL
+from testcontainers.community.minio import MinioContainer
 from testcontainers.community.postgres import PostgresContainer
 
+from patsquire_plr.config import ObjectStorageSettings
 from patsquire_plr.db.migrate import upgrade
-from tests.support import PGVECTOR_IMAGE, TEST_DB_PASSWORD
+from tests.support import (
+    MINIO_IMAGE,
+    PGVECTOR_IMAGE,
+    TEST_DB_PASSWORD,
+    TEST_S3_ACCESS_KEY,
+    TEST_S3_SECRET_KEY,
+)
 
 TEMPLATE_DB = "plr_template"
 
@@ -72,3 +82,32 @@ def empty_db_engine(admin_engine: Engine, postgres_url: URL) -> Iterator[Engine]
     engine.dispose()
     with admin_engine.connect() as conn:
         conn.execute(text(f"DROP DATABASE {name} WITH (FORCE)"))
+
+
+@pytest.fixture(scope="session")
+def object_storage() -> Iterator[ObjectStorageSettings]:
+    """A MinIO container with an empty bucket, as validated ObjectStorageSettings."""
+    container = MinioContainer(
+        MINIO_IMAGE, access_key=TEST_S3_ACCESS_KEY, secret_key=TEST_S3_SECRET_KEY
+    )
+    container.with_env("MINIO_ROOT_USER", TEST_S3_ACCESS_KEY)
+    container.with_env("MINIO_ROOT_PASSWORD", TEST_S3_SECRET_KEY)
+    container.with_kwargs(user="0:0")  # the image's /data is root-owned (see docker-compose.yml)
+    with container:
+        settings = ObjectStorageSettings(
+            endpoint_url=f"http://{container.get_container_host_ip()}:{container.get_exposed_port(9000)}",
+            region="us-east-1",
+            bucket="plr-test-raw",
+            access_key_id=SecretStr(TEST_S3_ACCESS_KEY),
+            secret_access_key=SecretStr(TEST_S3_SECRET_KEY),
+            connect_timeout_s=5,
+            read_timeout_s=10,
+        )
+        boto3.client(
+            "s3",
+            endpoint_url=settings.endpoint_url,
+            region_name="us-east-1",
+            aws_access_key_id=TEST_S3_ACCESS_KEY,
+            aws_secret_access_key=TEST_S3_SECRET_KEY,
+        ).create_bucket(Bucket=settings.bucket)
+        yield settings

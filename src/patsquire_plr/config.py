@@ -221,12 +221,33 @@ class ModelsSettings(_Section):
         return []
 
 
+class GooglePatentsPageSettings(_Section):
+    """Lookup of individual patents by number on Google Patents pages.
+
+    Only ``/patent/<number>/`` pages are requested, which the site's robots.txt allows.
+    Search pages are disallowed there and never used.
+    """
+
+    type: Literal["google_patents_page"]
+    base_url: str = Field(pattern=r"^https://")
+    user_agent: str = Field(min_length=1)
+    requests_per_minute: int = Field(ge=1, le=60, description="politeness ceiling")
+    timeout_s: float = Field(gt=0, le=300)
+    max_retries: int = Field(ge=0, le=5)
+
+
+# Grows into a discriminated union as more source types are added (ADR 0005).
+DataSourceSettings = GooglePatentsPageSettings
+_SOURCE_ID = r"^[a-z][a-z0-9_]*$"
+
+
 class Settings(_Section):
     app: AppSettings
     database: DatabaseSettings
     redis: RedisSettings
     object_storage: ObjectStorageSettings
     models: ModelsSettings
+    data_sources: dict[Annotated[str, Field(pattern=_SOURCE_ID)], DataSourceSettings]
 
 
 def secret_field_paths(

@@ -19,7 +19,12 @@ from patsquire_plr.gateway.secrets import SecretResolver
 from patsquire_plr.gateway.store import PostgresCallStore
 from patsquire_plr.health import default_checks, run_checks
 from patsquire_plr.ingest.rawstore import RawStore
-from patsquire_plr.ingest.runner import ReconciliationError, run_lookup_batch, start_lookup_batch
+from patsquire_plr.ingest.runner import (
+    BatchBusyError,
+    ReconciliationError,
+    run_lookup_batch,
+    start_lookup_batch,
+)
 from patsquire_plr.ingest.sources import build_source
 from patsquire_plr.log import configure_logging
 from patsquire_plr.reference.extract import (
@@ -274,8 +279,10 @@ def _run_batch(
     engine = create_db_engine(settings.database)
     try:
         batch = batch_id or start_lookup_batch(engine, source, keys)
+        # Printed first so a crashed run can always be resumed with this ID.
+        typer.echo(f"batch {batch} (resume with: plr ingest resume {batch})", err=True)
         report = run_lookup_batch(engine, RawStore(settings.object_storage), source, batch)
-    except ReconciliationError as exc:
+    except (ReconciliationError, BatchBusyError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
     finally:

@@ -34,11 +34,17 @@ from patsquire_plr.db.models import (
     QuarantinedRecord,
     RawRecord,
 )
+from patsquire_plr.domain.patent import (
+    NormalizationError,
+    PatentDocument,
+    normalize_publication_number,
+)
 from patsquire_plr.errors import PlrError
 from patsquire_plr.ingest.rawstore import RawStore
 from patsquire_plr.ingest.sources import Fetched, LookupSource
 
-FINAL_OUTCOMES = frozenset({"stored", "quarantined", "not_found", "invalid_request"})
+FINAL_OUTCOMES = frozenset({"stored", "quarantined", "duplicate", "not_found", "invalid_request"})
+FETCHED_OUTCOMES = ("stored", "quarantined", "duplicate")
 
 
 class ReconciliationError(PlrError):
@@ -58,13 +64,21 @@ class BatchReport(BaseModel):
     failed_keys: tuple[str, ...]
 
 
+def _identity(key: str) -> str:
+    """Spelling-independent identity of a requested key (the raw text if unparseable)."""
+    try:
+        return normalize_publication_number(key).text
+    except NormalizationError:
+        return key
+
+
 def _dedupe(keys: Sequence[str]) -> tuple[list[str], int]:
-    seen: dict[str, None] = {}
-    for key in keys:
-        cleaned = key.strip()
-        if cleaned:
-            seen.setdefault(cleaned, None)
-    return list(seen), len([k for k in keys if k.strip()]) - len(seen)
+    """Keep the first spelling of each distinct publication number, in request order."""
+    first: dict[str, str] = {}
+    cleaned = [k.strip() for k in keys if k.strip()]
+    for key in cleaned:
+        first.setdefault(_identity(key), key)
+    return list(first.values()), len(cleaned) - len(first)
 
 
 def start_lookup_batch(engine: Engine, source: LookupSource, keys: Sequence[str]) -> uuid.UUID:
@@ -102,11 +116,44 @@ def start_lookup_batch(engine: Engine, source: LookupSource, keys: Sequence[str]
         return batch.id
 
 
+class BatchBusyError(PlrError):
+    """Another process is already running this batch."""
+
+
 def run_lookup_batch(
     engine: Engine, raw_store: RawStore, source: LookupSource, batch_id: uuid.UUID
 ) -> BatchReport:
-    """Process every key of the batch that has no final outcome yet, then reconcile."""
-    with Session(engine) as session:
+    """Process every key of the batch that has no final outcome yet, then reconcile.
+
+    A session-level advisory lock on the batch makes concurrent runs of one batch impossible.
+    Any unexpected error marks the batch ``failed`` (audit-logged) before propagating, so it
+    can be resumed.
+    """
+    with engine.connect() as lock_conn:
+        locked: bool = lock_conn.execute(
+            select(func.pg_try_advisory_lock(_lock_key(batch_id)))
+        ).scalar_one()
+        if not locked:
+            raise BatchBusyError(f"batch {batch_id} is being processed by another run")
+        try:
+            pending = _prepare(engine, source, batch_id)
+            try:
+                for fetched in source.fetch(pending):
+                    _record(engine, raw_store, source, batch_id, fetched)
+            except Exception as exc:
+                _abort(engine, batch_id, exc)
+                raise
+            return _reconcile(engine, batch_id)
+        finally:
+            lock_conn.execute(select(func.pg_advisory_unlock(_lock_key(batch_id))))
+
+
+def _lock_key(batch_id: uuid.UUID) -> int:
+    return batch_id.int % (2**63)  # advisory locks take a signed 64-bit key
+
+
+def _prepare(engine: Engine, source: LookupSource, batch_id: uuid.UUID) -> list[str]:
+    with Session(engine) as session, session.begin():
         batch = session.get(IngestBatch, batch_id)
         if batch is None:
             raise PlrError(f"ingest batch {batch_id} does not exist")
@@ -114,21 +161,39 @@ def run_lookup_batch(
             raise PlrError(
                 f"batch {batch_id} belongs to source {batch.source_id}, not {source.info.source_id}"
             )
+        versions = (batch.adapter_version, batch.source_api_version)
+        if versions != (source.info.adapter_version, source.info.source_api_version):
+            raise PlrError(
+                f"batch {batch_id} was created with adapter {versions[0]} / {versions[1]}; the "
+                f"current adapter is {source.info.adapter_version} / "
+                f"{source.info.source_api_version}. Start a new batch instead of mixing versions."
+            )
         if batch.status == "complete":
             raise PlrError(f"batch {batch_id} is already complete")
         requested: list[str] = json.loads(batch.query_text or "{}")["keys"]
         latest = _latest_outcomes(session, batch_id)
-    pending = [k for k in requested if latest.get(k) not in FINAL_OUTCOMES]
-
-    with Session(engine) as session, session.begin():
         session.execute(
             update(IngestBatch)
             .where(IngestBatch.id == batch_id)
             .values(status="running", finished_at=None)
         )
-    for fetched in source.fetch(pending):
-        _record(engine, raw_store, source, batch_id, fetched)
-    return _reconcile(engine, batch_id)
+    return [k for k in requested if latest.get(k) not in FINAL_OUTCOMES]
+
+
+def _abort(engine: Engine, batch_id: uuid.UUID, exc: Exception) -> None:
+    with Session(engine) as session, session.begin():
+        session.execute(
+            update(IngestBatch)
+            .where(IngestBatch.id == batch_id)
+            .values(status="failed", finished_at=datetime.now(UTC))
+        )
+        append_event(
+            session,
+            step="ingest",
+            event_type="batch_aborted",
+            actor="system",
+            payload={"batch_id": str(batch_id), "error": f"{type(exc).__name__}: {exc}"[:2000]},
+        )
 
 
 def _record(
@@ -166,26 +231,72 @@ def _record(
         normalized = source.normalize(
             fetched.content, raw_record_id=raw.id, retrieved_at=fetched.retrieved_at
         )
-        for document, pointer in normalized.documents:
+        reasons = list(normalized.quarantine_reasons)
+        reasons += [
+            f"source served {d.publication.text} for requested {fetched.requested_key}"
+            for d, _ in normalized.documents
+            if not _matches_request(d, fetched.requested_key)
+        ]
+        duplicate_of = None if reasons else _already_stored(session, batch_id, normalized.documents)
+        if duplicate_of is not None:
+            session.add(
+                IngestItem(
+                    batch_id=batch_id,
+                    requested_key=fetched.requested_key,
+                    outcome="duplicate",
+                    raw_record_id=raw.id,
+                    document_count=0,
+                    detail=f"same publication as requested key {duplicate_of}",
+                )
+            )
+            return
+        stored = () if reasons else normalized.documents
+        for document, pointer in stored:
             store_document(session, document, raw_pointer=pointer)
-        if normalized.quarantine_reasons:
+        if reasons:
             session.add(
                 QuarantinedRecord(
-                    raw_record_id=raw.id,
-                    raw_pointer="(whole payload)",
-                    reasons=list(normalized.quarantine_reasons),
+                    raw_record_id=raw.id, raw_pointer="(whole payload)", reasons=reasons
                 )
             )
         session.add(
             IngestItem(
                 batch_id=batch_id,
                 requested_key=fetched.requested_key,
-                outcome="quarantined" if normalized.quarantine_reasons else "stored",
+                outcome="quarantined" if reasons else "stored",
                 raw_record_id=raw.id,
-                document_count=len(normalized.documents),
-                detail="; ".join(normalized.quarantine_reasons) or None,
+                document_count=len(stored),
+                detail="; ".join(reasons) or None,
             )
         )
+
+
+def _matches_request(document: PatentDocument, requested_key: str) -> bool:
+    """The served publication is the requested one (the kind only if one was requested)."""
+    requested = normalize_publication_number(requested_key)
+    served = document.publication
+    same_number = (served.country, served.number) == (requested.country, requested.number)
+    return same_number and requested.kind in (None, served.kind)
+
+
+def _already_stored(
+    session: Session, batch_id: uuid.UUID, documents: tuple[tuple[PatentDocument, str], ...]
+) -> str | None:
+    """The requested key under which an identical publication was already stored."""
+    for document, _ in documents:
+        key = session.scalar(
+            select(RawRecord.source_record_key)
+            .join(PatentDocumentRow, PatentDocumentRow.raw_record_id == RawRecord.id)
+            .where(
+                RawRecord.batch_id == batch_id,
+                PatentDocumentRow.publication_country == document.publication.country,
+                PatentDocumentRow.publication_number == document.publication.number,
+                PatentDocumentRow.publication_kind == document.publication.kind,
+            )
+        )
+        if key is not None:
+            return key
+    return None
 
 
 def _latest_outcomes(session: Session, batch_id: uuid.UUID) -> dict[str, str]:
@@ -214,9 +325,7 @@ def _reconcile(engine: Engine, batch_id: uuid.UUID) -> BatchReport:
         final_items = session.execute(
             select(
                 IngestItem.requested_key, IngestItem.raw_record_id, IngestItem.document_count
-            ).where(
-                IngestItem.batch_id == batch_id, IngestItem.outcome.in_(["stored", "quarantined"])
-            )
+            ).where(IngestItem.batch_id == batch_id, IngestItem.outcome.in_(FETCHED_OUTCOMES))
         ).all()
         raw_ids = {row.raw_record_id for row in final_items}
         raw_count = session.scalar(

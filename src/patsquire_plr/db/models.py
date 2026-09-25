@@ -138,11 +138,12 @@ class IngestItem(Base):
     __tablename__ = "ingest_item"
     __table_args__ = (
         CheckConstraint(
-            "outcome IN ('stored', 'quarantined', 'not_found', 'invalid_request', 'failed')",
+            "outcome IN ('stored', 'quarantined', 'duplicate', 'not_found', 'invalid_request', "
+            "'failed')",
             name="outcome",
         ),
         CheckConstraint(
-            "(outcome IN ('stored', 'quarantined')) = (raw_record_id IS NOT NULL)",
+            "(outcome IN ('stored', 'quarantined', 'duplicate')) = (raw_record_id IS NOT NULL)",
             name="raw_record_iff_fetched",
         ),
         CheckConstraint("document_count >= 0", name="document_count_non_negative"),

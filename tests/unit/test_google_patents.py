@@ -7,6 +7,7 @@ page structure, these tests fail, which is the intended alarm.
 from __future__ import annotations
 
 import gzip
+import re
 import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -100,7 +101,9 @@ def test_us_grant_full_record() -> None:
     assert citations[0].publication_number == "US5093563A"
     assert citations[0].origin == "examiner"
     assert d.forward_citations is not None
-    assert len(d.forward_citations.citing_publication_numbers) == 14
+    # every citing publication (22), not the one-row-per-family view (14)
+    assert len(d.forward_citations.citing_publication_numbers) == 22
+    assert "US10845468B2" in d.forward_citations.citing_publication_numbers
 
 
 def test_fields_the_page_never_provides_are_explicitly_missing() -> None:
@@ -130,7 +133,26 @@ def test_application_publication_carries_its_applications_status() -> None:
     d = _parse("US20160266243A1")
     assert d.legal_status is not None
     assert d.legal_status.category == "granted"  # the application behind this A1 was granted
-    assert d.grant_date == date(2018, 6, 19)
+    # ...but this A1 is not the grant publication (US10000000B2 is), so no grant date here
+    assert d.grant_date is None
+    assert d.missing["grant_date"] is MissingReason.NOT_APPLICABLE
+
+
+@pytest.mark.parametrize(
+    ("number", "grant_date"),
+    [("US10000000B2", date(2018, 6, 19)), ("US5093563A", date(1992, 3, 3))],
+)
+def test_grant_date_only_on_the_grant_publication(number: str, grant_date: date) -> None:
+    assert _parse(number).grant_date == grant_date
+
+
+@pytest.mark.parametrize(
+    "number", ["US20160266243A1", "CN112345678A", "EP3123456A1", "WO2020123456A1"]
+)
+def test_non_grant_publications_have_no_grant_date(number: str) -> None:
+    d = _parse(number)
+    assert d.grant_date is None
+    assert d.missing["grant_date"] is MissingReason.NOT_APPLICABLE
 
 
 def test_unmapped_legal_status_is_other_with_raw_text_kept() -> None:
@@ -138,7 +160,6 @@ def test_unmapped_legal_status_is_other_with_raw_text_kept() -> None:
     assert d.legal_status is not None
     assert (d.legal_status.category, d.legal_status.status_raw) == ("other", "Ceased")
     assert "Ceased" not in LEGAL_STATUS_CATEGORIES
-    assert d.missing["grant_date"] is MissingReason.NOT_PROVIDED_BY_SOURCE
 
 
 def test_old_patent_and_expired_status() -> None:
@@ -146,7 +167,7 @@ def test_old_patent_and_expired_status() -> None:
     assert d.legal_status is not None
     assert d.legal_status.category == "expired"
     assert d.forward_citations is not None
-    assert len(d.forward_citations.citing_publication_numbers) == 88
+    assert len(d.forward_citations.citing_publication_numbers) == 155
 
 
 def test_every_fixture_parses_without_quarantine() -> None:
@@ -299,3 +320,46 @@ def test_build_source_constructs_the_configured_adapter() -> None:
     assert source.info.source_type == "google_patents_page"
     with pytest.raises(TypeError, match="unsupported settings"):
         build_source("x", object())
+
+
+HEADING = re.compile(rb"<h2>(Patent Citations|Non-Patent Citations|Cited By) \((\d+)\)</h2>")
+
+
+@pytest.mark.parametrize(
+    "number", sorted(p.name.removesuffix(".html.gz") for p in FIXTURES.glob("*.html.gz"))
+)
+def test_citation_counts_match_the_pages_own_headings(number: str) -> None:
+    headings = {m[0].decode(): int(m[1]) for m in HEADING.findall(_page(number))}
+    citations = _parse(number).backward_citations or ()
+    assert sum(c.kind == "patent" for c in citations) == headings.get("Patent Citations", 0)
+    assert sum(c.kind == "npl" for c in citations) == headings.get("Non-Patent Citations", 0)
+
+
+def test_npl_citation_origin_is_kept() -> None:
+    npl = [c for c in _parse("CN112345678A").backward_citations or () if c.kind == "npl"]
+    assert len(npl) == 4
+    assert {c.origin for c in npl} == {"examiner"}
+
+
+def test_machine_translated_title_is_not_stored() -> None:
+    page = _page("US10000000B2").replace(
+        b'<span itemprop="title">',
+        b'<span itemprop="translatedLanguage">German</span><span itemprop="title">',
+        1,
+    )
+    result = _source().normalize(page, raw_record_id=uuid.UUID(int=1), retrieved_at=RETRIEVED)
+    [(d, _)] = result.documents
+    assert d.title is None
+    assert d.missing["title"] is MissingReason.UNPARSEABLE
+
+
+def test_too_many_redirects_fails_the_item_without_retry() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(302, headers={"location": str(request.url)})
+
+    [result] = _source(httpx.MockTransport(handler)).fetch(["US10000000B2"])
+    assert result.status == "failed"
+    assert "TooManyRedirects" in (result.detail or "")

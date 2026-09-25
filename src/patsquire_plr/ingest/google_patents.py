@@ -181,44 +181,53 @@ class GooglePatentsPageSource:
         for attempt in range(1, self._settings.max_retries + 2):
             self._limiter.acquire()
             try:
-                response = self._client.get(url)
+                outcome = self._classify(key, url, self._client.get(url))
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                detail = f"{type(exc).__name__}: {exc}"
-            else:
-                final_path = response.url.path
-                if not final_path.startswith("/patent/"):
-                    return Fetched(
-                        requested_key=key,
-                        status="failed",
-                        detail=f"redirected outside /patent/ to {final_path}; not followed further",
-                    )
-                if response.status_code == HTTP_NOT_FOUND:
-                    return Fetched(requested_key=key, status="not_found", detail=url)
-                if response.status_code == HTTP_OK:
-                    if b'itemprop="publicationNumber"' not in response.content:
-                        return Fetched(
-                            requested_key=key,
-                            status="failed",
-                            detail="HTTP 200 but the page has no patent microdata",
-                        )
-                    return Fetched(
-                        requested_key=key,
-                        status="ok",
-                        content=response.content,
-                        content_type=response.headers.get("content-type", "text/html"),
-                        retrieved_at=self._now(),
-                    )
-                detail = f"HTTP {response.status_code}"
-                if not (
-                    response.status_code == HTTP_TOO_MANY_REQUESTS
-                    or response.status_code >= HTTP_SERVER_ERROR
-                ):
-                    return Fetched(requested_key=key, status="failed", detail=detail)
+                outcome = f"{type(exc).__name__}: {exc}"
+            except httpx.HTTPError as exc:  # e.g. TooManyRedirects: not worth retrying
+                outcome = Fetched(
+                    requested_key=key, status="failed", detail=f"{type(exc).__name__}: {exc}"
+                )
+            if isinstance(outcome, Fetched):
+                return outcome
+            detail = outcome
             if attempt <= self._settings.max_retries:
                 self._sleep(min(MAX_BACKOFF_S, 2.0**attempt))
         return Fetched(
             requested_key=key, status="failed", detail=f"gave up after retries: {detail}"
         )
+
+    def _classify(self, key: str, url: str, response: httpx.Response) -> Fetched | str:
+        """A final outcome, or a string describing a retryable condition."""
+        final_path = response.url.path
+        if not final_path.startswith("/patent/"):
+            return Fetched(
+                requested_key=key,
+                status="failed",
+                detail=f"redirected outside /patent/ to {final_path}; not followed further",
+            )
+        if response.status_code == HTTP_NOT_FOUND:
+            return Fetched(requested_key=key, status="not_found", detail=url)
+        if response.status_code == HTTP_OK:
+            if b'itemprop="publicationNumber"' not in response.content:
+                return Fetched(
+                    requested_key=key,
+                    status="failed",
+                    detail="HTTP 200 but the page has no patent microdata",
+                )
+            return Fetched(
+                requested_key=key,
+                status="ok",
+                content=response.content,
+                content_type=response.headers.get("content-type", "text/html"),
+                retrieved_at=self._now(),
+            )
+        retryable = (
+            response.status_code == HTTP_TOO_MANY_REQUESTS
+            or response.status_code >= HTTP_SERVER_ERROR
+        )
+        detail = f"HTTP {response.status_code}"
+        return detail if retryable else Fetched(requested_key=key, status="failed", detail=detail)
 
     # ---------------------------------------------------------------- normalising
 
@@ -268,7 +277,10 @@ class GooglePatentsPageSource:
             )
 
         translated = bool(_xpath(root, './/*[@itemprop="translatedLanguage"]'))
-        put("title", None if translated else _first_value(root, "title"))
+        if translated:
+            put("title", None, MissingReason.UNPARSEABLE)  # only a machine translation shown
+        else:
+            put("title", _first_value(root, "title"))
         abstract, abstract_lang, abstract_reason = self._official_text(
             root, "abstract", ".//abstract"
         )
@@ -284,7 +296,8 @@ class GooglePatentsPageSource:
         put("earliest_priority_date", _date(_first_value(root, "priorityDate"), "priorityDate"))
         put("filing_date", _date(_first_value(root, "filingDate"), "filingDate"))
         put("publication_date", _date(_first_value(root, "publicationDate"), "publicationDate"))
-        put("grant_date", self._grant_date(root))
+        grant_date, grant_reason = self._grant_date(root, publication.text)
+        put("grant_date", grant_date, grant_reason)
         for field in ("family_id_simple", "family_id_extended", "priorities", "ipc"):
             put(field, None)  # the page does not provide these
 
@@ -333,11 +346,29 @@ class GooglePatentsPageSource:
         )
 
     @staticmethod
-    def _grant_date(root: HtmlElement) -> date | None:
+    def _grant_date(root: HtmlElement, number: str) -> tuple[date | None, MissingReason]:
+        """This publication's grant date, only if this publication *is* the grant.
+
+        The page's events belong to the application: "Application granted" carries the date of
+        the grant publication, which may be a different document (e.g. the B1 of this A1). The
+        date is used only when it equals this publication's own publication event; a
+        publication that is not the grant gets ``not_applicable``.
+        """
+        granted: date | None = None
+        own_publication: date | None = None
         for event in _props(root, "events"):
-            if _first_value(event, "type") == "granted":
-                return _date(_first_value(event, "date"), "events.granted.date")
-        return None
+            kind = _first_value(event, "type")
+            if kind == "granted":
+                granted = _date(_first_value(event, "date"), "events.granted.date")
+            elif (
+                kind == "publication" and _first_value(event, "title") == f"Publication of {number}"
+            ):
+                own_publication = _date(_first_value(event, "date"), "events.publication.date")
+        if own_publication is None:
+            return None, MissingReason.NOT_PROVIDED_BY_SOURCE
+        if granted is not None and granted == own_publication:
+            return granted, MissingReason.NOT_PROVIDED_BY_SOURCE
+        return None, MissingReason.NOT_APPLICABLE
 
     @staticmethod
     def _parties(root: HtmlElement, prop: str, role: str) -> tuple[Party, ...]:
@@ -378,15 +409,11 @@ class GooglePatentsPageSource:
         return LegalStatus(category=category, status_raw=raw, as_of=as_of)  # type: ignore[arg-type]
 
     @staticmethod
-    def _family_scope(root: HtmlElement) -> HtmlElement | None:
-        """The page's ``family`` section; this publication's own citation tables live in it."""
-        scopes = _props(root, "family")
-        return scopes[0] if scopes else None
-
-    @classmethod
-    def _backward_citations(cls, root: HtmlElement) -> tuple[CitedReference, ...] | None:
-        family = cls._family_scope(root)
-        patents = _props(family, "backwardReferencesOrig") if family is not None else []
+    def _backward_citations(root: HtmlElement) -> tuple[CitedReference, ...] | None:
+        # Root-level lists are this publication's complete citations. The tables inside the
+        # page's "family" section are family-level views (one row per family) and are not
+        # used.
+        patents = _props(root, "backwardReferences")
         npl = _props(root, "detailedNonPatentLiterature")
         if not patents and not npl:
             return None
@@ -409,21 +436,22 @@ class GooglePatentsPageSource:
             text = _first_value(row, "title")
             if text is None:
                 raise _ParseError("non-patent citation row without text")
+            marker = _first_value(row, "examinerCited") or ""
             citations.append(
                 CitedReference(
                     kind="npl",
                     publication_number=None,
                     publication_number_raw=None,
                     npl_text=text,
-                    origin="unknown",
+                    origin=CITATION_ORIGIN.get(marker, "unknown"),  # type: ignore[arg-type]
                 )
             )
         return tuple(citations)
 
-    @classmethod
-    def _forward_citations(cls, root: HtmlElement, as_of: date) -> ForwardCitations | None:
-        family = cls._family_scope(root)
-        rows = _props(family, "forwardReferencesOrig") if family is not None else []
+    @staticmethod
+    def _forward_citations(root: HtmlElement, as_of: date) -> ForwardCitations | None:
+        # Every citing publication (root level), not the one-per-family view.
+        rows = _props(root, "forwardReferences")
         if not rows:
             return None
         numbers = []

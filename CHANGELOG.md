@@ -18,6 +18,17 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
   * polite rate limit and bounded retries;
   * refuses redirects outside `/patent/`.
 - Migration 0003: `ingest_item` (append-only) and the `active` legal-status category.
+- **Review fixes:**
+  * Complete citation lists: forward citations were a per-family subset.
+  * Examiner markers kept on non-patent citations.
+  * Grant date set only on the grant publication.
+  * Translated titles recorded as unparseable.
+  * Requests de-duplicated by normalised number, and the served publication must match the
+    request.
+  * New `duplicate` outcome (migration 0004).
+  * Per-batch advisory lock; crashed runs are marked failed and resumable, with the batch
+    ID printed first.
+  * Resume checks the adapter version.
 - `plr ingest lookup` / `plr ingest resume`, the `data_sources` config section, and ADR 0007.
 - Contract tests on six real recorded pages. A real ingest of 10 numbers reconciled 100%
   (8 stored, 1 not found, 1 invalid, 1 duplicate ignored).

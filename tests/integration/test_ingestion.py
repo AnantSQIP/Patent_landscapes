@@ -33,7 +33,12 @@ from patsquire_plr.db.models import (
 from patsquire_plr.errors import PlrError
 from patsquire_plr.ingest.google_patents import GooglePatentsPageSource
 from patsquire_plr.ingest.rawstore import RawStore, RawStoreError, object_key
-from patsquire_plr.ingest.runner import ReconciliationError, run_lookup_batch, start_lookup_batch
+from patsquire_plr.ingest.runner import (
+    BatchBusyError,
+    ReconciliationError,
+    run_lookup_batch,
+    start_lookup_batch,
+)
 from tests.support import TEST_DB_PASSWORD, base_config, base_secrets
 
 pytestmark = pytest.mark.integration
@@ -333,3 +338,120 @@ def test_count_mismatch_fails_reconciliation_loudly(
             select(AuditEvent).where(AuditEvent.event_type == "batch_finished")
         ).one()
         assert "raw records" in str(finished.payload["problems"])
+
+
+# ---------------------------------------------------------------- review fixes
+
+
+def test_spelling_variants_are_one_request(db_engine: Engine) -> None:
+    source = _source(_serve({}))
+    batch_id = start_lookup_batch(
+        db_engine, source, ["US 10,000,000 B2", "us10000000b2", "US10000000B2"]
+    )
+    with Session(db_engine) as session:
+        batch = session.get(IngestBatch, batch_id)
+        assert batch is not None
+        assert json.loads(batch.query_text or "") == {
+            "keys": ["US 10,000,000 B2"],
+            "duplicates_ignored": 2,
+        }
+
+
+def test_keys_resolving_to_the_same_publication_store_it_once(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    page = _pages()["EP3123456A1"]
+
+    def handler(request: httpx.Request) -> httpx.Response:  # both URLs serve the A1 page
+        return httpx.Response(200, content=page)
+
+    source = _source(handler)
+    report = run_lookup_batch(
+        db_engine,
+        RawStore(object_storage),
+        source,
+        start_lookup_batch(db_engine, source, ["EP3123456A1", "EP3123456"]),
+    )
+
+    assert report.status == "complete"
+    assert report.outcomes == {"duplicate": 1, "stored": 1}
+    assert report.documents_stored == 1
+    with Session(db_engine) as session:
+        detail = session.scalar(select(IngestItem.detail).where(IngestItem.outcome == "duplicate"))
+    assert detail == "same publication as requested key EP3123456A1"
+
+
+def test_a_different_publication_than_requested_is_quarantined(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    page = _pages()["US10000000B2"]
+    source = _source(lambda request: httpx.Response(200, content=page))
+
+    report = run_lookup_batch(
+        db_engine,
+        RawStore(object_storage),
+        source,
+        start_lookup_batch(db_engine, source, ["US10000001B2"]),
+    )
+
+    assert report.outcomes == {"quarantined": 1}
+    with Session(db_engine) as session:
+        [quarantined] = session.scalars(select(QuarantinedRecord)).all()
+    assert quarantined.reasons == ["source served US10000000B2 for requested US10000001B2"]
+
+
+def test_a_batch_cannot_run_twice_at_once(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    source = _source(_serve(_pages()))
+    batch_id = start_lookup_batch(db_engine, source, ["US10000000B2"])
+    with db_engine.connect() as other_run:
+        other_run.execute(select(func.pg_advisory_lock(batch_id.int % (2**63))))
+        with pytest.raises(BatchBusyError, match="another run"):
+            run_lookup_batch(db_engine, RawStore(object_storage), source, batch_id)
+        other_run.execute(select(func.pg_advisory_unlock(batch_id.int % (2**63))))
+    assert (
+        run_lookup_batch(db_engine, RawStore(object_storage), source, batch_id).status == "complete"
+    )
+
+
+class _BrokenStore(RawStore):
+    """TEST-ONLY raw store whose writes fail, e.g. object storage is down."""
+
+    def put(self, source_id: str, content: bytes, content_type: str) -> tuple[str, str]:
+        raise RawStoreError("object storage unavailable")
+
+
+def test_unexpected_errors_mark_the_batch_failed_and_resumable(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    source = _source(_serve(_pages()))
+    batch_id = start_lookup_batch(db_engine, source, ["US10000000B2"])
+
+    with pytest.raises(RawStoreError, match="unavailable"):
+        run_lookup_batch(db_engine, _BrokenStore(object_storage), source, batch_id)
+    with Session(db_engine) as session:
+        batch = session.get(IngestBatch, batch_id)
+        assert batch is not None
+        assert batch.status == "failed"
+        aborted = session.scalars(
+            select(AuditEvent).where(AuditEvent.event_type == "batch_aborted")
+        ).one()
+        assert "object storage unavailable" in str(aborted.payload["error"])
+
+    assert (
+        run_lookup_batch(db_engine, RawStore(object_storage), source, batch_id).status == "complete"
+    )
+
+
+def test_resume_refuses_a_different_adapter_version(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    source = _source(_serve(_pages(), fail={"US10000000B2"}))
+    batch_id = start_lookup_batch(db_engine, source, ["US10000000B2"])
+    run_lookup_batch(db_engine, RawStore(object_storage), source, batch_id)
+
+    upgraded = _source(_serve(_pages()))
+    upgraded._info = upgraded.info.model_copy(update={"adapter_version": "2"})
+    with pytest.raises(PlrError, match="created with adapter 1"):
+        run_lookup_batch(db_engine, RawStore(object_storage), upgraded, batch_id)

@@ -11,6 +11,12 @@ import typer
 
 from patsquire_plr.config import Settings, load_settings
 from patsquire_plr.db import migrate
+from patsquire_plr.db.datasets import (
+    DatasetError,
+    build_dataset,
+    render_report_markdown,
+    report_dataset,
+)
 from patsquire_plr.db.engine import create_db_engine
 from patsquire_plr.errors import ConfigError
 from patsquire_plr.gateway.gateway import ModelGateway
@@ -51,6 +57,9 @@ models_app = typer.Typer(no_args_is_help=True, help="Model backends and roles.")
 app.add_typer(models_app, name="models")
 ingest_app = typer.Typer(no_args_is_help=True, help="Ingest patent records from data sources.")
 app.add_typer(ingest_app, name="ingest")
+dataset_app = typer.Typer(no_args_is_help=True, help="Build and review analysis datasets.")
+app.add_typer(dataset_app, name="dataset")
+DEFAULT_ALIASES = Path("config/applicant_aliases.yaml")
 
 TemplateOption = Annotated[Path, typer.Option("--template", help="Template specification YAML.")]
 DEFAULT_TEMPLATE = Path("template/plr_template.yaml")
@@ -321,3 +330,47 @@ def ingest_resume(
 ) -> None:
     """Retry only the items of a batch whose latest outcome is 'failed', then reconcile."""
     _run_batch(_load(config_file, env_file), source, batch_id, [])
+
+
+@dataset_app.command("build")
+def dataset_build(
+    batch: Annotated[list[uuid.UUID], typer.Option(help="Ingest batch to include (repeatable).")],
+    name: Annotated[str, typer.Option(help="A name for this dataset.")],
+    aliases: Annotated[Path, typer.Option(help="Applicant alias file.")] = DEFAULT_ALIASES,
+    config_file: ConfigFileOption = DEFAULT_CONFIG_FILE,
+    env_file: EnvFileOption = None,
+) -> None:
+    """De-duplicate, group families and normalise applicants into an immutable dataset."""
+    engine = create_db_engine(_load(config_file, env_file).database)
+    try:
+        dataset_id = build_dataset(engine, name=name, batch_ids=batch, alias_file=aliases)
+        typer.echo(render_report_markdown(report_dataset(engine, dataset_id)))
+    except DatasetError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+
+@dataset_app.command("report")
+def dataset_report(
+    dataset_id: Annotated[uuid.UUID, typer.Argument(help="Dataset to report on.")],
+    output: Annotated[str, typer.Option(help="markdown or json")] = "markdown",
+    config_file: ConfigFileOption = DEFAULT_CONFIG_FILE,
+    env_file: EnvFileOption = None,
+) -> None:
+    """Print the normalisation report (merges, look-alikes to review, conflicts)."""
+    if output not in ("markdown", "json"):
+        typer.echo("--output must be markdown or json", err=True)
+        raise typer.Exit(code=2)
+    engine = create_db_engine(_load(config_file, env_file).database)
+    try:
+        report = report_dataset(engine, dataset_id)
+    except DatasetError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+    typer.echo(
+        render_report_markdown(report) if output == "markdown" else report.model_dump_json(indent=2)
+    )

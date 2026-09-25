@@ -42,13 +42,15 @@ from patsquire_plr.domain.patent import (
     NormalizationError,
     Party,
     PatentDocument,
+    PublicationNumber,
     normalize_classification_code,
     normalize_publication_number,
 )
 from patsquire_plr.ingest.sources import Fetched, Normalized, SourceInfo
 from patsquire_plr.ratelimit import RateLimiter
 
-ADAPTER_VERSION = "1"
+# 2: family members captured; 3: unparseable list entries mark only that field
+ADAPTER_VERSION = "3"
 SOURCE_API_VERSION = "patents.google.com patent page, schema.org microdata (verified 2026-09-25)"
 HTTP_OK = 200
 HTTP_NOT_FOUND = 404
@@ -130,6 +132,36 @@ def _date(text: str | None, field: str) -> date | None:
 
 
 # ------------------------------------------------------------------ the adapter
+
+
+class _Fields:
+    """Accumulates canonical field values, missing reasons and non-fatal warnings."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, object] = {}
+        self.missing: dict[str, MissingReason] = {}
+        self.warnings: list[str] = []
+
+    def put(
+        self,
+        field: str,
+        value: object,
+        reason: MissingReason = MissingReason.NOT_PROVIDED_BY_SOURCE,
+    ) -> None:
+        if value is None or value == ():
+            self.missing[field] = reason
+            self.values[field] = None
+        else:
+            self.values[field] = value
+
+    def lenient(self, field: str, parse: Callable[[], object]) -> None:
+        """A list field with an unparseable entry becomes ``unparseable`` (with a warning
+        naming the entry) instead of quarantining the whole record."""
+        try:
+            self.put(field, parse())
+        except NormalizationError as exc:
+            self.warnings.append(f"{field}: {exc}")
+            self.put(field, None, MissingReason.UNPARSEABLE)
 
 
 class GooglePatentsPageSource:
@@ -235,7 +267,9 @@ class GooglePatentsPageSource:
         self, content: bytes, *, raw_record_id: uuid.UUID, retrieved_at: datetime
     ) -> Normalized:
         try:
-            document = self._parse(content, raw_record_id, retrieved_at.astimezone(UTC).date())
+            document, warnings = self._parse(
+                content, raw_record_id, retrieved_at.astimezone(UTC).date()
+            )
         except (_ParseError, NormalizationError) as exc:
             return Normalized(documents=(), quarantine_reasons=(str(exc),))
         except ValidationError as exc:
@@ -244,27 +278,46 @@ class GooglePatentsPageSource:
                 for err in exc.errors(include_url=False, include_input=False)
             )
             return Normalized(documents=(), quarantine_reasons=reasons)
-        return Normalized(documents=((document, "article[itemscope]"),))
+        return Normalized(documents=((document, "article[itemscope]"),), warnings=warnings)
 
-    def _parse(self, content: bytes, raw_record_id: uuid.UUID, as_of: date) -> PatentDocument:
+    def _parse(
+        self, content: bytes, raw_record_id: uuid.UUID, as_of: date
+    ) -> tuple[PatentDocument, tuple[str, ...]]:
         # Decode explicitly: the pages are UTF-8, and guessing from bytes garbles non-Latin text.
         page = html.document_fromstring(content, parser=html.HTMLParser(encoding="utf-8"))
         roots = _xpath(page, "//article[@itemscope]")
         if len(roots) != 1:
             raise _ParseError(f"expected one article item scope, found {len(roots)}")
         root: HtmlElement = roots[0]
-        missing: dict[str, MissingReason] = {}
-        values: dict[str, object] = {}
+        publication_raw, publication = self._publication(root)
+        fields = _Fields()
+        self._read_text(root, fields)
+        self._read_dates(root, publication.text, fields)
+        for field in ("family_id_simple", "family_id_extended", "priorities", "ipc"):
+            fields.put(field, None)  # the page does not provide these
+        fields.lenient("family_members", lambda: self._family_members(root, publication.text))
+        fields.put("applicants", self._parties(root, "assigneeOriginal", "applicant"))
+        fields.put("inventors", self._parties(root, "inventor", "inventor"))
+        fields.put("cpc", self._cpc(root))
+        fields.put("legal_status", self._legal_status(root, as_of))
+        fields.lenient("backward_citations", lambda: self._backward_citations(root))
+        fields.lenient("forward_citations", lambda: self._forward_citations(root, as_of))
 
-        def put(
-            field: str, value: object, reason: MissingReason = MissingReason.NOT_PROVIDED_BY_SOURCE
-        ) -> None:
-            if value is None or value == ():
-                missing[field] = reason
-                values[field] = None
-            else:
-                values[field] = value
+        unexpected = set(fields.values) ^ set(CANONICAL_OPTIONAL_FIELDS)
+        if unexpected:  # pragma: no cover - guards the field list above
+            raise _ParseError(f"parser field coverage mismatch: {sorted(unexpected)}")
+        document = PatentDocument(
+            raw_record_id=raw_record_id,
+            source_id=self._info.source_id,
+            publication=publication,
+            publication_number_raw=publication_raw,
+            missing=fields.missing,  # type: ignore[arg-type]
+            **fields.values,  # type: ignore[arg-type]
+        )
+        return document, tuple(fields.warnings)
 
+    @staticmethod
+    def _publication(root: HtmlElement) -> tuple[str, PublicationNumber]:
         publication_raw = _first_value(root, "publicationNumber")
         if publication_raw is None:
             raise _ParseError("page has no publicationNumber")
@@ -275,50 +328,36 @@ class GooglePatentsPageSource:
                 f"publication number {publication_raw} disagrees with countryCode={country} "
                 f"kindCode={kind}"
             )
+        return publication_raw, publication
 
-        translated = bool(_xpath(root, './/*[@itemprop="translatedLanguage"]'))
-        if translated:
-            put("title", None, MissingReason.UNPARSEABLE)  # only a machine translation shown
+    def _read_text(self, root: HtmlElement, fields: _Fields) -> None:
+        if _xpath(root, './/*[@itemprop="translatedLanguage"]'):
+            fields.put("title", None, MissingReason.UNPARSEABLE)  # only a machine translation
         else:
-            put("title", _first_value(root, "title"))
+            fields.put("title", _first_value(root, "title"))
         abstract, abstract_lang, abstract_reason = self._official_text(
             root, "abstract", ".//abstract"
         )
         claims, claims_lang, claims_reason = self._official_text(
             root, "claims", './/*[contains(@class, "claims")]'
         )
-        put("abstract", abstract, abstract_reason)
-        put("claims", claims, claims_reason)
+        fields.put("abstract", abstract, abstract_reason)
+        fields.put("claims", claims, claims_reason)
         language = abstract_lang or claims_lang
-        put("language", language if language and re.fullmatch(r"[a-z]{2}", language) else None)
+        valid = language if language and re.fullmatch(r"[a-z]{2}", language) else None
+        fields.put("language", valid)
 
-        put("application_number_raw", _first_value(root, "applicationNumber"))
-        put("earliest_priority_date", _date(_first_value(root, "priorityDate"), "priorityDate"))
-        put("filing_date", _date(_first_value(root, "filingDate"), "filingDate"))
-        put("publication_date", _date(_first_value(root, "publicationDate"), "publicationDate"))
-        grant_date, grant_reason = self._grant_date(root, publication.text)
-        put("grant_date", grant_date, grant_reason)
-        for field in ("family_id_simple", "family_id_extended", "priorities", "ipc"):
-            put(field, None)  # the page does not provide these
-
-        put("applicants", self._parties(root, "assigneeOriginal", "applicant"))
-        put("inventors", self._parties(root, "inventor", "inventor"))
-        put("cpc", self._cpc(root))
-        put("legal_status", self._legal_status(root, as_of))
-        put("backward_citations", self._backward_citations(root))
-        put("forward_citations", self._forward_citations(root, as_of))
-
-        unexpected = set(values) ^ set(CANONICAL_OPTIONAL_FIELDS)
-        if unexpected:  # pragma: no cover - guards the field list above
-            raise _ParseError(f"parser field coverage mismatch: {sorted(unexpected)}")
-        return PatentDocument(
-            raw_record_id=raw_record_id,
-            source_id=self._info.source_id,
-            publication=publication,
-            publication_number_raw=publication_raw,
-            missing=missing,  # type: ignore[arg-type]
-            **values,  # type: ignore[arg-type]
+    def _read_dates(self, root: HtmlElement, number: str, fields: _Fields) -> None:
+        fields.put("application_number_raw", _first_value(root, "applicationNumber"))
+        fields.put(
+            "earliest_priority_date", _date(_first_value(root, "priorityDate"), "priorityDate")
         )
+        fields.put("filing_date", _date(_first_value(root, "filingDate"), "filingDate"))
+        fields.put(
+            "publication_date", _date(_first_value(root, "publicationDate"), "publicationDate")
+        )
+        grant_date, grant_reason = self._grant_date(root, number)
+        fields.put("grant_date", grant_date, grant_reason)
 
     @staticmethod
     def _official_text(
@@ -369,6 +408,23 @@ class GooglePatentsPageSource:
         if granted is not None and granted == own_publication:
             return granted, MissingReason.NOT_PROVIDED_BY_SOURCE
         return None, MissingReason.NOT_APPLICABLE
+
+    @staticmethod
+    def _family_members(root: HtmlElement, own: str) -> tuple[str, ...] | None:
+        """The page's "Also Published As" table (microdata ``docdbFamily``): the other
+        members of this publication's DOCDB simple family, as the page states them."""
+        rows = _props(root, "docdbFamily")
+        if not rows:
+            return None
+        members: list[str] = []
+        for row in rows:
+            raw = _first_value(row, "publicationNumber")
+            if raw is None:
+                raise _ParseError("family row without publicationNumber")
+            number = normalize_publication_number(raw).text
+            if number != own and number not in members:
+                members.append(number)
+        return tuple(members)
 
     @staticmethod
     def _parties(root: HtmlElement, prop: str, role: str) -> tuple[Party, ...]:

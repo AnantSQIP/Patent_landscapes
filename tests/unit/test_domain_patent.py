@@ -69,6 +69,7 @@ def _party(role: str, seq: int, country: str | None = "US") -> Party:
         ("USRE45678E", "US", "RE45678", "E"),
         ("USD890123S", "US", "D890123", "S"),
         ("CN112345678", "CN", "112345678", None),
+        ("SG10201707936TA", "SG", "10201707936T", "A"),  # Singapore trailing check letter
     ],
 )
 def test_publication_numbers_normalise(
@@ -80,7 +81,7 @@ def test_publication_numbers_normalise(
     assert result.text == f"{country}{number}{kind or ''}"
 
 
-@pytest.mark.parametrize("raw", ["", "12345", "USABC", "U1234", "unknown"])
+@pytest.mark.parametrize("raw", ["", "12345", "USABC", "U1234", "unknown", "US10201707936TA"])
 def test_unrecognised_publication_numbers_raise(raw: str) -> None:
     with pytest.raises(NormalizationError, match="publication number"):
         normalize_publication_number(raw)
@@ -260,3 +261,10 @@ def test_publication_cannot_precede_filing() -> None:
 
 def test_every_template_record_field_maps_to_the_canonical_model() -> None:
     assert set(RECORD_FIELD_PATHS) == set(typing.get_args(RecordField))
+
+
+def test_family_members_cannot_list_the_document_itself_or_repeat() -> None:
+    with pytest.raises(ValidationError, match="must not list the document itself"):
+        _bare(family_members=("US10123456B2",))
+    with pytest.raises(ValidationError, match="contains repeats"):
+        _bare(family_members=("EP1A1", "EP1A1"))

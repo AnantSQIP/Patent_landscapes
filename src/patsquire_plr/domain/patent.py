@@ -44,6 +44,10 @@ class _Strict(BaseModel):
 
 # ------------------------------------------------------------------ identifiers
 
+# Offices whose publication numbers end in a check letter before the kind code, e.g.
+# Singapore "SG10201707936TA" = number 10201707936T, kind A (IPOS numbering).
+OFFICES_WITH_CHECK_LETTER = frozenset({"SG"})
+
 _PUB_NUMBER = re.compile(r"^(?P<country>[A-Z]{2})(?P<number>[0-9A-Z]+?)(?P<kind>[A-Z][0-9]?)?$")
 
 
@@ -72,7 +76,8 @@ def normalize_publication_number(raw: str) -> PublicationNumber:
     if match is None or not any(c.isdigit() for c in match["number"]):
         raise NormalizationError(f"unrecognised publication number: {raw!r}")
     number, kind = match["number"], match["kind"]
-    if kind is not None and not number[-1].isdigit():
+    check_letter_ok = match["country"] in OFFICES_WITH_CHECK_LETTER and number[:-1].isdigit()
+    if kind is not None and not number[-1].isdigit() and not check_letter_ok:
         raise NormalizationError(f"ambiguous kind code in publication number: {raw!r}")
     return PublicationNumber(country=match["country"], number=number, kind=kind)
 
@@ -173,6 +178,7 @@ CanonicalField = Literal[
     "application_number_raw",
     "family_id_simple",
     "family_id_extended",
+    "family_members",
     "earliest_priority_date",
     "priorities",
     "filing_date",
@@ -204,6 +210,10 @@ class PatentDocument(_Strict):
     application_number_raw: str | None
     family_id_simple: str | None
     family_id_extended: str | None
+    family_members: tuple[str, ...] | None = Field(
+        description="other publications the source states are in this document's simple "
+        "(DOCDB) family, as normalised publication numbers; excludes the document itself"
+    )
     earliest_priority_date: date | None
     priorities: tuple[Priority, ...] | None
     filing_date: date | None
@@ -239,6 +249,11 @@ class PatentDocument(_Strict):
             elif value is not None and reason is not None:
                 problems.append(f"{name} has a value and a missing reason ({reason})")
         problems += self._role_and_scheme_problems()
+        if self.family_members is not None:
+            if self.publication.text in self.family_members:
+                problems.append("family_members must not list the document itself")
+            if len(set(self.family_members)) != len(self.family_members):
+                problems.append("family_members contains repeats")
         problems += self._date_order_problems()
         if problems:
             raise ValueError("; ".join(problems))
@@ -283,7 +298,7 @@ class PatentDocument(_Strict):
 RECORD_FIELD_PATHS: dict[str, str] = {
     "publication_number": "publication",
     "application_number": "application_number_raw",
-    "family_id": "family_id_simple | family_id_extended (per the family_definition option)",
+    "family_id": "family_id_simple | family_id_extended | family_members (grouped in Phase 4)",
     "kind_code": "publication.kind",
     "filing_office": "publication.country",
     "priority_date": "earliest_priority_date",

@@ -5,7 +5,7 @@ patent ID in a report must trace back to retrieved patent data through an audit 
 The full specification is in [`PLR_System_Build_Prompt.md`](PLR_System_Build_Prompt.md),
 and background on PLRs is in [`PLR_Complete_Guide.md`](PLR_Complete_Guide.md).
 
-**Status:** Phases 0–2 are done. Phase 3 (patent data ingestion) is in review. See [`CHANGELOG.md`](CHANGELOG.md).
+**Status:** Phases 0–3 are done. Phase 4 (cleaning, families, applicant names) is in review. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Quick start (WSL / Linux)
 
@@ -54,6 +54,8 @@ Secrets are masked in `repr`, in `plr config show` and in logs. See
 | `plr models health` | Makes a real call to every model role (see Models below). Exits 1 on any failure. |
 | `plr ingest lookup NUMBERS... [--numbers-file F]` | Fetches publications by number from a data source, stores the raw pages, normalises and reconciles them. Exits 1 if any item failed. |
 | `plr ingest resume BATCH_ID` | Retries only the failed items of a batch. |
+| `plr dataset build --batch ID... --name N` | Builds an immutable dataset: one copy per publication, patent families, normalised applicant names. Prints the review report. |
+| `plr dataset report DATASET_ID [--output json]` | Reprints the normalisation report (name merges, look-alikes to review, conflicts). |
 
 ## Tests
 

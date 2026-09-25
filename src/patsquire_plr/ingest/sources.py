@@ -44,6 +44,10 @@ class Normalized(_Frozen):
         description="(document, raw_pointer) pairs"
     )
     quarantine_reasons: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = Field(
+        default=(),
+        description="non-fatal problems, e.g. a field recorded as unparseable and why",
+    )
 
 
 class LookupSource(Protocol):

@@ -220,3 +220,50 @@ def test_every_input_is_decided_once_and_every_publication_is_in_one_family(
     # replanning is deterministic
     again = plan_dataset(inputs, NO_ALIASES)
     assert (again.families, again.members) == (plan.families, plan.members)
+
+
+def test_evidence_is_claimed_only_where_it_linked_publications() -> None:
+    # Joined by a stated member only; each also has an application number no one else shares.
+    plan = plan_dataset(
+        [
+            _in(_doc("US1A1", members=("EP2A1",), application="US 111")),
+            _in(_doc("EP2A1", application="EP 222")),
+        ],
+        NO_ALIASES,
+    )
+    [family] = plan.families
+    assert family.evidence == ("stated_member",)
+
+
+def test_family_ids_are_scoped_by_source() -> None:
+    first = _doc("EP1A1", family_id="54321")
+    other_source = _doc("JP2A", family_id="54321").model_copy(update={"source_id": "other"})
+    plan = plan_dataset([_in(first), _in(other_source)], NO_ALIASES)
+    assert len(plan.families) == 2  # the same ID from two sources is not proof of one family
+
+
+def test_asymmetric_family_statements_are_reported() -> None:
+    plan = plan_dataset(
+        [_in(_doc("US1B1", members=("EP2A1",))), _in(_doc("EP2A1", members=("JP3A",)))], NO_ALIASES
+    )
+    assert plan.family_warnings == (
+        "US1B1 lists EP2A1 as a family member, but EP2A1 does not list US1B1",
+    )
+
+
+def test_conservation_detects_wrong_family_counts() -> None:
+    inputs = [_in(_doc("US1B1", members=("EP2A1",)))]
+    plan = plan_dataset(inputs, NO_ALIASES)
+    [family] = plan.families
+    broken = DatasetPlan(
+        decisions=plan.decisions,
+        conflicts=plan.conflicts,
+        families=(
+            family.__class__(family.key, family.evidence, family.publications_in_dataset, 0),
+        ),
+        members=plan.members,
+        applicants=plan.applicants,
+        selected=plan.selected,
+    )
+    with pytest.raises(ConservationError, match="stored counts disagree"):
+        check_conservation(inputs, broken)

@@ -35,7 +35,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
             "state grid corp of china sgcc",
         ),  # suffix only at the end
         ("Inc.", "inc"),  # a bare suffix keeps itself rather than becoming empty
-        ("Acme Co Co", "acme"),  # suffixes are stripped until none is left
+        ("Acme Co Co", "acme"),
+        (
+            "\u091f\u093e\u091f\u093e \u092e\u094b\u091f\u0930\u094d\u0938",
+            "\u091f\u093e\u091f\u093e \u092e\u094b\u091f\u0930\u094d\u0938",
+        ),  # Devanagari vowel signs kept  # suffixes are stripped until none is left
         ("Samsung Co Ltd Inc", "samsung"),
         (
             "\uff33\uff2f\uff2e\uff39\u3000\uff27\uff32\uff2f\uff35\uff30",
@@ -165,3 +169,23 @@ def test_similar_keys_lists_candidates_for_review_only() -> None:
     assert ("raytheon", "raytheon technologies") in found
     assert ("samsung electronic", "samsung electronics") in found
     assert not any("bosch" in pair for pair in found)
+
+
+@given(names.filter(lambda s: "&" not in s and "\uff06" not in s))  # "&" becomes "and"
+def test_no_letters_digits_or_combining_marks_are_removed(raw: str) -> None:
+    import unicodedata  # noqa: PLC0415
+
+    def kept(text: str) -> list[str]:
+        return [
+            c
+            for c in unicodedata.normalize("NFKC", text).casefold()
+            if unicodedata.category(c)[0] in "LNM"
+        ]
+
+    key = normalize_name(raw)
+    removed_suffix_chars = sum(
+        len(step.removeprefix("suffix:").replace(" ", ""))
+        for step in key.steps
+        if step.startswith("suffix:")
+    )
+    assert len(kept(key.key)) == len(kept(raw)) - removed_suffix_chars

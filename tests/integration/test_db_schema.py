@@ -358,3 +358,12 @@ def test_documents_stored_before_family_members_existed_load_as_not_requested(
         document = load_document(session, doc_id)
     assert document.family_members is None
     assert document.missing["family_members"] is MissingReason.NOT_REQUESTED
+
+    downgrade(empty_db_engine, "0004")  # older code has no such field: the key must go again
+    with empty_db_engine.connect() as conn:
+        keys: list[bool] = list(
+            conn.execute(text("SELECT missing ? 'family_members' FROM patent_document"))
+            .scalars()
+            .all()
+        )
+    assert keys == [False]

@@ -52,6 +52,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Remove the backfilled key, or older code (which has no family_members field) would reject
+    # every document. Same controlled trigger exception as the upgrade.
+    op.execute("ALTER TABLE patent_document DISABLE TRIGGER patent_document_append_only")
+    op.execute(
+        "UPDATE patent_document SET missing = missing - 'family_members' WHERE missing ? 'family_members'"
+    )
+    op.execute("ALTER TABLE patent_document ENABLE TRIGGER patent_document_append_only")
     op.execute(
         "DROP TRIGGER IF EXISTS document_family_member_no_truncate ON document_family_member"
     )

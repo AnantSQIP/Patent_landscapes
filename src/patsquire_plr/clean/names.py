@@ -15,7 +15,6 @@ Two layers, both fully logged:
 from __future__ import annotations
 
 import json
-import re
 import unicodedata
 from collections.abc import Iterable
 from difflib import SequenceMatcher
@@ -27,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from patsquire_plr.errors import PlrError
 
-RULES_VERSION = "1"
+RULES_VERSION = "2"  # 2: combining marks kept (category-based symbol stripping)
 
 # Legal-form words and phrases, matched as whole trailing tokens after punctuation removal.
 # Longest first, so "co ltd" is removed as one suffix rather than leaving "co".
@@ -48,7 +47,12 @@ LEGAL_SUFFIXES: tuple[tuple[str, ...], ...] = tuple(
         reverse=True,
     )
 )  # fmt: skip
-_PUNCTUATION = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def _strip_symbols(text: str) -> str:
+    """Punctuation, symbols and control characters become spaces. Letters, digits and
+    combining marks (Unicode categories L, N, M; e.g. Devanagari vowel signs) are kept."""
+    return "".join(c if unicodedata.category(c)[0] in "LNM" or c.isspace() else " " for c in text)
 
 
 class AliasFileError(PlrError):
@@ -76,7 +80,7 @@ def normalize_name(raw: str) -> NameKey:
     replaced = folded.replace("&", " and ")
     if replaced != folded:
         steps.append("ampersand")
-    stripped = _PUNCTUATION.sub(" ", replaced)
+    stripped = _strip_symbols(replaced)
     if stripped != replaced:
         steps.append("punctuation")
     tokens = stripped.split()

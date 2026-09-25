@@ -37,6 +37,12 @@ from patsquire_plr.domain.patent import PatentDocument
 from patsquire_plr.errors import PlrError
 
 COPY_RULE = "latest_retrieval"
+# Stated honestly: a transitive union of what sources state, which can be wider than a strict
+# DOCDB simple family (e.g. Google lists continuations as family members).
+FAMILY_DEFINITION = (
+    "source_stated_family: transitive union of stated family members, equal source family "
+    "IDs and shared applications"
+)
 Evidence = Literal["stated_member", "family_id", "application"]
 # Fields that legitimately differ between copies and are not treated as conflicts.
 _IDENTITY_FIELDS = frozenset({"raw_record_id", "source_id"})
@@ -103,6 +109,7 @@ class DatasetPlan:
     members: tuple[FamilyMember, ...]
     applicants: tuple[Applicant, ...]
     selected: dict[str, InputDocument] = field(repr=False)
+    family_warnings: tuple[str, ...] = ()
 
 
 class _UnionFind:
@@ -132,7 +139,7 @@ def application_key(raw: str, country: str) -> str:
 
 def plan_dataset(inputs: list[InputDocument], aliases: AliasFile) -> DatasetPlan:
     decisions, conflicts, selected = _choose_copies(inputs)
-    families, members = _group_families(selected)
+    families, members, family_warnings = _group_families(selected)
     applicants = _normalise_applicants(selected, aliases)
     plan = DatasetPlan(
         decisions=tuple(decisions),
@@ -141,6 +148,7 @@ def plan_dataset(inputs: list[InputDocument], aliases: AliasFile) -> DatasetPlan
         members=tuple(members),
         applicants=tuple(applicants),
         selected=selected,
+        family_warnings=tuple(family_warnings),
     )
     check_conservation(inputs, plan)
     return plan
@@ -194,26 +202,35 @@ def _json_text(value: object) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
-def _group_families(selected: dict[str, InputDocument]) -> tuple[list[Family], list[FamilyMember]]:
+def _group_families(
+    selected: dict[str, InputDocument],
+) -> tuple[list[Family], list[FamilyMember], list[str]]:
     uf = _UnionFind()
-    evidence: dict[str, set[Evidence]] = defaultdict(set)  # node -> evidence kinds touching it
+    stated_edges: list[tuple[str, str]] = []
+    attachments: dict[str, set[str]] = defaultdict(set)  # "#..." evidence node -> publications
     for publication, item in selected.items():
         doc = item.document
         uf.find(publication)
         for member in doc.family_members or ():
             uf.union(publication, member)
-            evidence[publication].add("stated_member")
-            evidence[member].add("stated_member")
-        for family_id in (doc.family_id_simple,):
-            if family_id is not None:
-                uf.union(publication, f"#family_id:{family_id}")
-                evidence[publication].add("family_id")
+            stated_edges.append((publication, member))
+        if doc.family_id_simple is not None:
+            node = f"#family_id:{doc.source_id}:{doc.family_id_simple}"  # IDs are per source
+            uf.union(publication, node)
+            attachments[node].add(publication)
         if doc.application_number_raw is not None:
-            uf.union(
-                publication,
-                "#application:" + application_key(doc.application_number_raw, doc.filing_office),
-            )
-            evidence[publication].add("application")
+            node = "#application:" + application_key(doc.application_number_raw, doc.filing_office)
+            uf.union(publication, node)
+            attachments[node].add(publication)
+
+    # Evidence is claimed only where it actually linked two publications.
+    evidence: dict[str, set[Evidence]] = defaultdict(set)  # component root -> kinds
+    for a, _ in stated_edges:
+        evidence[uf.find(a)].add("stated_member")
+    for node, publications in attachments.items():
+        if len(publications) > 1:
+            kind: Evidence = "family_id" if node.startswith("#family_id:") else "application"
+            evidence[uf.find(node)].add(kind)
 
     components: dict[str, list[str]] = defaultdict(list)
     for node in list(uf.parent):
@@ -221,7 +238,7 @@ def _group_families(selected: dict[str, InputDocument]) -> tuple[list[Family], l
             components[uf.find(node)].append(node)
     families: list[Family] = []
     members: list[FamilyMember] = []
-    for nodes in components.values():
+    for root, nodes in components.items():
         in_dataset = sorted(n for n in nodes if n in selected)
         if (
             not in_dataset
@@ -229,17 +246,31 @@ def _group_families(selected: dict[str, InputDocument]) -> tuple[list[Family], l
             continue
         key = in_dataset[0]
         external = sorted(n for n in nodes if n not in selected)
-        kinds: set[Evidence] = set()
-        for node in nodes:
-            kinds |= evidence.get(node, set())
-        if len(in_dataset) + len(external) == 1:
-            kinds = set()  # a family of one needs no evidence
-        families.append(Family(key, tuple(sorted(kinds)), len(in_dataset), len(external)))
+        families.append(
+            Family(key, tuple(sorted(evidence.get(root, set()))), len(in_dataset), len(external))
+        )
         members += [FamilyMember(key, p, True) for p in in_dataset]
         members += [FamilyMember(key, p, False) for p in external]
     families.sort(key=lambda f: f.key)
     members.sort(key=lambda m: (m.family_key, not m.in_dataset, m.publication))
-    return families, members
+    return families, members, _asymmetric_statements(selected)
+
+
+def _asymmetric_statements(selected: dict[str, InputDocument]) -> list[str]:
+    """A lists B, B was retrieved with a known member list, but B does not list A: one of the
+    two statements may be wrong, and it may bridge two families. Reported, not resolved."""
+    warnings = []
+    for publication, item in sorted(selected.items()):
+        for member in item.document.family_members or ():
+            other = selected.get(member)
+            if other is None or other.document.family_members is None:
+                continue
+            if publication not in other.document.family_members:
+                warnings.append(
+                    f"{publication} lists {member} as a family member, but {member} does not "
+                    f"list {publication}"
+                )
+    return warnings
 
 
 def _normalise_applicants(
@@ -289,10 +320,30 @@ def check_conservation(inputs: list[InputDocument], plan: DatasetPlan) -> None:
     externals = [m.publication for m in plan.members if not m.in_dataset]
     if len(externals) != len(set(externals)) or set(externals) & set(plan.selected):
         problems.append("stated members outside the dataset must appear once, in one family")
-    expected_applicants = sum(len(i.document.applicants or ()) for i in plan.selected.values())
-    if len(plan.applicants) != expected_applicants:
-        problems.append(
-            f"{len(plan.applicants)} applicant rows for {expected_applicants} applicants"
-        )
+    problems += _family_count_problems(plan)
+    expected = Counter(
+        (publication, party.sequence)
+        for publication, item in plan.selected.items()
+        for party in item.document.applicants or ()
+    )
+    actual = Counter((a.publication, a.sequence) for a in plan.applicants)
+    if actual != expected:
+        problems.append("applicant rows do not match the selected documents' applicants")
     if problems:
         raise ConservationError("; ".join(problems))
+
+
+def _family_count_problems(plan: DatasetPlan) -> list[str]:
+    problems = []
+    keys = [f.key for f in plan.families]
+    if len(keys) != len(set(keys)) or set(keys) != {m.family_key for m in plan.members}:
+        problems.append("families and family members must name the same family keys, once each")
+    inside = Counter(m.family_key for m in plan.members if m.in_dataset)
+    outside = Counter(m.family_key for m in plan.members if not m.in_dataset)
+    for family in plan.families:
+        counts = (family.publications_in_dataset, family.stated_members_not_retrieved)
+        if counts != (inside[family.key], outside[family.key]):
+            problems.append(f"family {family.key}: stored counts disagree with its members")
+    if sum(f.publications_in_dataset for f in plan.families) != len(plan.selected):
+        problems.append("family sizes do not add up to the selected publications")
+    return problems

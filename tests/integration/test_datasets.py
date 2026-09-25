@@ -68,7 +68,7 @@ def test_dataset_groups_families_and_accounts_for_every_document(
             select(AuditEvent).where(AuditEvent.event_type == "dataset_built")
         ).one()
         assert event.payload["publications"] == 4
-    assert report.config["name_rules_version"] == "1"
+    assert report.config["name_rules_version"] == "2"
     assert report.conflicts == []  # identical re-fetch of the same page
 
 
@@ -158,3 +158,31 @@ def test_cli_build_and_report(
         app, ["dataset", "report", dataset_id, "--output", "xml", "--config", str(config)]
     )
     assert bad.exit_code == 2
+
+
+def test_report_shows_alias_merges_and_unknown_family_members(
+    db_engine: Engine, object_storage: ObjectStorageSettings, tmp_path: Path
+) -> None:
+    aliases = tmp_path / "aliases.yaml"
+    aliases.write_text(
+        "version: 1\ngroups:\n  - canonical: Raytheon Technologies\n"
+        "    variants: [Raytheon Co, Hughes Aircraft Co]\n"
+        "    reason: test-only alias group for the report\n",
+        encoding="utf-8",
+    )
+    batch = uuid.UUID(_ingest(db_engine, object_storage, ["US10000000B2", "US5093563A"]))
+    report = report_dataset(
+        db_engine, build_dataset(db_engine, name="alias", batch_ids=[batch], alias_file=aliases)
+    )
+
+    [merge] = report.name_merges
+    assert merge.entity == "Raytheon Technologies"
+    assert merge.spellings == ["Hughes Aircraft Co", "Raytheon Co"]
+    assert merge.keys == ["hughes aircraft", "raytheon"]
+    assert merge.alias_reason == "test-only alias group for the report"
+    # the 1992 page has no "Also Published As" table: shown as unknown, not as a family of one
+    assert report.family_members_unknown == {"not_provided_by_source": 1}
+    assert "source_stated_family" in str(report.config["family_definition"])
+    markdown = render_report_markdown(report)
+    assert "Raytheon Technologies" in markdown
+    assert "## Family statements to check" in markdown

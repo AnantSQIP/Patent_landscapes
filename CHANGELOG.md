@@ -18,6 +18,15 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
 - `plr dataset build` / `plr dataset report` (Markdown or JSON), ADR 0008.
 - Parsing fixes: Singapore check-letter numbers are accepted, and an unparseable entry in a
   family or citation list marks only that field (adapter v3).
+- **Review fixes:**
+  * Family evidence is recorded only where it linked publications, and family IDs are
+    scoped by source.
+  * The family definition is stated honestly (`source_stated_family`), and asymmetric family
+    statements are reported.
+  * Conservation now reconciles family counts and applicant rows.
+  * The report shows alias merges, unknown family members and family warnings.
+  * Name rules v2 keep combining marks.
+  * The migration 0005 downgrade removes its backfill.
 
 
 ### Added: Phase 3, patent data ingestion

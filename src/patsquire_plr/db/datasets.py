@@ -6,13 +6,14 @@ import hashlib
 import json
 import uuid
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
-from patsquire_plr.clean.dataset import COPY_RULE, InputDocument, plan_dataset
+from patsquire_plr.clean.dataset import COPY_RULE, FAMILY_DEFINITION, InputDocument, plan_dataset
 from patsquire_plr.clean.names import RULES_VERSION, load_aliases, similar_keys
 from patsquire_plr.db.audit import append_event
 from patsquire_plr.db.documents import load_document
@@ -64,12 +65,13 @@ def build_dataset(
     plan = plan_dataset(inputs, aliases)
     config: dict[str, object] = {
         "copy_rule": COPY_RULE,
-        "family_definition": "simple_family",
+        "family_definition": FAMILY_DEFINITION,
         "family_evidence": ["stated_member", "family_id", "application"],
         "name_rules_version": RULES_VERSION,
         "alias_file": str(alias_file),
         "alias_file_version": aliases.version,
         "alias_file_sha256": hashlib.sha256(alias_file.read_bytes()).hexdigest(),
+        "family_warnings": list(plan.family_warnings),
     }
     with Session(engine) as session, session.begin():
         dataset = Dataset(
@@ -154,12 +156,15 @@ def build_dataset(
 
 
 class NameMerge(BaseModel):
+    """One entity whose applicant rows came from more than one raw spelling."""
+
     model_config = ConfigDict(frozen=True)
 
     entity: str
-    key: str
+    keys: list[str]
     spellings: list[str]
     rules: list[str]
+    alias_reason: str | None
 
 
 class DatasetReport(BaseModel):
@@ -173,6 +178,8 @@ class DatasetReport(BaseModel):
     publications: int
     families: int
     family_sizes: dict[str, int]
+    family_members_unknown: dict[str, int]
+    family_warnings: list[str]
     conflicts: list[dict[str, object]]
     name_merges: list[NameMerge]
     review_candidates: list[dict[str, object]]
@@ -199,27 +206,35 @@ def report_dataset(engine: Engine, dataset_id: uuid.UUID) -> DatasetReport:
         applicants = session.scalars(
             select(DatasetApplicant).where(DatasetApplicant.dataset_id == dataset_id)
         ).all()
+        # Selected documents whose source did not say who their family members are.
+        reasons: Sequence[str | None] = session.scalars(
+            select(PatentDocumentRow.missing["family_members"].astext)
+            .join(DatasetDocument, DatasetDocument.document_id == PatentDocumentRow.id)
+            .where(DatasetDocument.dataset_id == dataset_id, DatasetDocument.decision == "selected")
+        ).all()
+    unknown = Counter(r for r in reasons if r is not None)
+    stored_warnings = dataset.config.get("family_warnings", [])
+    family_warnings = [str(w) for w in stored_warnings] if isinstance(stored_warnings, list) else []
 
-    spellings: dict[str, set[str]] = defaultdict(set)
-    entity: dict[str, str] = {}
-    steps: dict[str, set[str]] = defaultdict(set)
-    for a in applicants:
-        spellings[a.name_key].add(a.name_raw)
-        entity[a.name_key] = a.entity_name
-        steps[a.name_key].update(str(s) for s in a.rule_steps)
+    by_entity: dict[str, list[DatasetApplicant]] = defaultdict(list)
+    for applicant in applicants:
+        by_entity[applicant.entity_name].append(applicant)
     merges = [
-        NameMerge(entity=entity[k], key=k, spellings=sorted(v), rules=sorted(steps[k]))
-        for k, v in sorted(spellings.items())
-        if len(v) > 1
+        NameMerge(
+            entity=entity,
+            keys=sorted({r.name_key for r in rows}),
+            spellings=sorted({r.name_raw for r in rows}),
+            rules=sorted({str(step) for r in rows for step in r.rule_steps}),
+            alias_reason=next((r.alias_reason for r in rows if r.alias_reason), None),
+        )
+        for entity, rows in sorted(by_entity.items())
+        if len({r.name_raw for r in rows}) > 1
     ]
-    candidates = [
-        {
-            "key_a": a,
-            "key_b": b,
-            "similarity": ratio,
-            "action": "review: add an alias group only if one entity",
-        }
-        for a, b, ratio in similar_keys(spellings)
+    entity_of_key = {a.name_key: a.entity_name for a in applicants}
+    candidates: list[dict[str, object]] = [
+        {"key_a": a, "key_b": b, "similarity": ratio}
+        for a, b, ratio in similar_keys(entity_of_key)
+        if entity_of_key[a] != entity_of_key[b]  # already one entity: not a candidate
     ]
     size_counts = Counter(
         str(f.publications_in_dataset + f.stated_members_not_retrieved) for f in families
@@ -233,6 +248,8 @@ def report_dataset(engine: Engine, dataset_id: uuid.UUID) -> DatasetReport:
         publications=dataset.publications,
         families=dataset.families,
         family_sizes=dict(sorted(size_counts.items(), key=lambda kv: int(kv[0]))),
+        family_members_unknown=dict(sorted(unknown.items())),
+        family_warnings=family_warnings,
         conflicts=[
             {"publication": c.publication, "field": c.field, "values": c.values} for c in conflicts
         ],
@@ -262,14 +279,25 @@ def render_report_markdown(report: DatasetReport) -> str:
         f"* Publications: {report.publications} in {report.families} families",
         "* Family sizes (publications incl. stated members not retrieved): "
         + ", ".join(f"{size}: {count}" for size, count in report.family_sizes.items()),
+        "* Selected publications whose family members are unknown: "
+        + (
+            ", ".join(f"{reason}: {n}" for reason, n in report.family_members_unknown.items())
+            if report.family_members_unknown
+            else "none"
+        )
+        + " (their families may be larger than shown)",
         "",
         "## Applicant name merges (formatting rules and alias groups)",
         "",
     ]
     if report.name_merges:
-        lines += ["| Entity | Spellings merged | Rules applied |", "|---|---|---|"]
         lines += [
-            f"| {m.entity} | {'; '.join(m.spellings)} | {', '.join(m.rules)} |"
+            "| Entity | Spellings merged | Rules applied | Alias reason |",
+            "|---|---|---|---|",
+        ]
+        lines += [
+            f"| {m.entity} | {'; '.join(m.spellings)} | {', '.join(m.rules) or '-'} "
+            f"| {m.alias_reason or '-'} |"
             for m in report.name_merges
         ]
     else:
@@ -291,5 +319,7 @@ def render_report_markdown(report: DatasetReport) -> str:
         ]
     else:
         lines.append("None.")
+    lines += ["", "## Family statements to check", ""]
+    lines += [f"* {w}" for w in report.family_warnings] or ["None."]
     lines += ["", "## Configuration", "", "```json", json.dumps(report.config, indent=2), "```", ""]
     return "\n".join(lines)

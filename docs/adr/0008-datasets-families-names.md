@@ -10,7 +10,11 @@
 * **One copy per publication:** the most recently retrieved copy is kept, and the others are
   excluded as `superseded_copy`. Every field on which the copies differ is stored as a
   conflict and shown in the report, never silently resolved.
-* **Families (simple families)** are found by union-find over three kinds of evidence:
+* **Families** are recorded under the definition `source_stated_family`, the transitive
+  union of what the sources state. That can be wider than a strict DOCDB simple family, so
+  the dataset does not claim to be one. They are found by union-find over three kinds of
+  evidence (evidence is recorded only where it actually linked two publications; family IDs
+  are compared only within one source):
   * stated family members (e.g. Google's "Also Published As" / `docdbFamily` table);
   * equal source family IDs;
   * the same application (office-scoped, formatting-free number).
@@ -31,6 +35,15 @@
   * every input document has exactly one decision;
   * every publication is selected once and belongs to exactly one family;
   * applicant rows match applicants.
+* **Visibility in the report:**
+  * how many selected publications have unknown family members, and why (so a "family of
+    one" is never an unknown family in disguise);
+  * asymmetric statements ("A lists B, B does not list A");
+  * merges grouped by final entity, including alias groups and their reasons;
+  * look-alike pairs only when they are not already one entity.
+* **Name rules v2:** only punctuation, symbols and control characters are stripped.
+  Letters, digits and combining marks (e.g. Devanagari vowel signs) are always kept, and a
+  property test checks this.
 * **Proportional parsing:** one unparseable number in a family or citation list marks only
   that field `unparseable`, with a warning on the ingest item. Singapore numbers with a
   trailing check letter (`SG10201707936TA`) are accepted.

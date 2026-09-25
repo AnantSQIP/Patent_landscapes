@@ -1,0 +1,39 @@
+# =============================================================================
+# REPOSITORY WORKFLOW RULES (full version and rollback recipes: CONTRIBUTING.md)
+#  1. Never develop on main. Every change goes on a branch:
+#     phase/<n>-<slug>, feat/<slug>, fix/<slug>, docs/<slug>.
+#     Major changes (schema, dependencies, refactors, deletions) ALWAYS get their own branch.
+#  2. Merge only after `make check` passes, using `git merge --no-ff <branch>`.
+#  3. Before every merge: run scripts/backup.sh (verified bundle outside the repo) and
+#     tag main as backup/pre-merge-<branch>-<YYYYMMDD>.
+#  4. Tag each finished phase (phase-<n>) and push branches and tags to GitHub.
+#  5. Never force-push main, never rewrite pushed history, never delete tags or backups.
+#  6. Roll back with `git revert` (or `git revert -m 1 <merge>`), never `reset --hard`.
+#  7. Never commit secrets (.env), data dumps, or the reference PDFs; that's what this
+#     file enforces below.
+# =============================================================================
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Reference reports are third-party copyrighted material: keep them local only.
+*.pdf
+reference/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/

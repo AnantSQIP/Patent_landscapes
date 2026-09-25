@@ -310,7 +310,7 @@ def test_source_identifies_its_format_version() -> None:
     assert (info.source_id, info.source_type, info.adapter_version) == (
         "google_patents",
         "google_patents_page",
-        "1",
+        "2",
     )
     assert info.source_api_version == SOURCE_API_VERSION
 
@@ -363,3 +363,23 @@ def test_too_many_redirects_fails_the_item_without_retry() -> None:
     [result] = _source(httpx.MockTransport(handler)).fetch(["US10000000B2"])
     assert result.status == "failed"
     assert "TooManyRedirects" in (result.detail or "")
+
+
+def test_family_members_are_the_also_published_as_table() -> None:
+    d = _parse("US10000000B2")
+    assert d.family_members is not None
+    assert len(d.family_members) == 14
+    assert {"US20160266243A1", "EP3268771B1", "WO2016144528A1"} <= set(d.family_members)
+    assert "US10000000B2" not in d.family_members
+    # the A1 of the same application lists the B2 as a family member
+    a1 = _parse("US20160266243A1")
+    assert a1.family_members is not None
+    assert "US10000000B2" in a1.family_members
+
+
+@pytest.mark.parametrize(
+    "number", sorted(p.name.removesuffix(".html.gz") for p in FIXTURES.glob("*.html.gz"))
+)
+def test_family_members_never_include_the_document_itself(number: str) -> None:
+    d = _parse(number)
+    assert d.family_members is None or number not in d.family_members

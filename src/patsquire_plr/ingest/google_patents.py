@@ -48,7 +48,7 @@ from patsquire_plr.domain.patent import (
 from patsquire_plr.ingest.sources import Fetched, Normalized, SourceInfo
 from patsquire_plr.ratelimit import RateLimiter
 
-ADAPTER_VERSION = "1"
+ADAPTER_VERSION = "2"  # 2: family members ("Also Published As") captured
 SOURCE_API_VERSION = "patents.google.com patent page, schema.org microdata (verified 2026-09-25)"
 HTTP_OK = 200
 HTTP_NOT_FOUND = 404
@@ -300,6 +300,7 @@ class GooglePatentsPageSource:
         put("grant_date", grant_date, grant_reason)
         for field in ("family_id_simple", "family_id_extended", "priorities", "ipc"):
             put(field, None)  # the page does not provide these
+        put("family_members", self._family_members(root, publication.text))
 
         put("applicants", self._parties(root, "assigneeOriginal", "applicant"))
         put("inventors", self._parties(root, "inventor", "inventor"))
@@ -369,6 +370,23 @@ class GooglePatentsPageSource:
         if granted is not None and granted == own_publication:
             return granted, MissingReason.NOT_PROVIDED_BY_SOURCE
         return None, MissingReason.NOT_APPLICABLE
+
+    @staticmethod
+    def _family_members(root: HtmlElement, own: str) -> tuple[str, ...] | None:
+        """The page's "Also Published As" table (microdata ``docdbFamily``): the other
+        members of this publication's DOCDB simple family, as the page states them."""
+        rows = _props(root, "docdbFamily")
+        if not rows:
+            return None
+        members: list[str] = []
+        for row in rows:
+            raw = _first_value(row, "publicationNumber")
+            if raw is None:
+                raise _ParseError("family row without publicationNumber")
+            number = normalize_publication_number(raw).text
+            if number != own and number not in members:
+                members.append(number)
+        return tuple(members)
 
     @staticmethod
     def _parties(root: HtmlElement, prop: str, role: str) -> tuple[Party, ...]:

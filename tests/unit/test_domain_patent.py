@@ -260,3 +260,10 @@ def test_publication_cannot_precede_filing() -> None:
 
 def test_every_template_record_field_maps_to_the_canonical_model() -> None:
     assert set(RECORD_FIELD_PATHS) == set(typing.get_args(RecordField))
+
+
+def test_family_members_cannot_list_the_document_itself_or_repeat() -> None:
+    with pytest.raises(ValidationError, match="must not list the document itself"):
+        _bare(family_members=("US10123456B2",))
+    with pytest.raises(ValidationError, match="contains repeats"):
+        _bare(family_members=("EP1A1", "EP1A1"))

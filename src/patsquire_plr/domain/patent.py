@@ -173,6 +173,7 @@ CanonicalField = Literal[
     "application_number_raw",
     "family_id_simple",
     "family_id_extended",
+    "family_members",
     "earliest_priority_date",
     "priorities",
     "filing_date",
@@ -204,6 +205,10 @@ class PatentDocument(_Strict):
     application_number_raw: str | None
     family_id_simple: str | None
     family_id_extended: str | None
+    family_members: tuple[str, ...] | None = Field(
+        description="other publications the source states are in this document's simple "
+        "(DOCDB) family, as normalised publication numbers; excludes the document itself"
+    )
     earliest_priority_date: date | None
     priorities: tuple[Priority, ...] | None
     filing_date: date | None
@@ -239,6 +244,11 @@ class PatentDocument(_Strict):
             elif value is not None and reason is not None:
                 problems.append(f"{name} has a value and a missing reason ({reason})")
         problems += self._role_and_scheme_problems()
+        if self.family_members is not None:
+            if self.publication.text in self.family_members:
+                problems.append("family_members must not list the document itself")
+            if len(set(self.family_members)) != len(self.family_members):
+                problems.append("family_members contains repeats")
         problems += self._date_order_problems()
         if problems:
             raise ValueError("; ".join(problems))
@@ -283,7 +293,7 @@ class PatentDocument(_Strict):
 RECORD_FIELD_PATHS: dict[str, str] = {
     "publication_number": "publication",
     "application_number": "application_number_raw",
-    "family_id": "family_id_simple | family_id_extended (per the family_definition option)",
+    "family_id": "family_id_simple | family_id_extended | family_members (grouped in Phase 4)",
     "kind_code": "publication.kind",
     "filing_office": "publication.country",
     "priority_date": "earliest_priority_date",

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from patsquire_plr.db.models import (
     DocumentCitation,
     DocumentClassification,
+    DocumentFamilyMember,
     DocumentForwardCitation,
     DocumentParty,
     DocumentPriority,
@@ -119,6 +120,12 @@ def store_document(session: Session, document: PatentDocument, *, raw_pointer: s
                 origin=citation.origin,
             )
         )
+    for ordinal, number in enumerate(document.family_members or (), start=1):
+        session.add(
+            DocumentFamilyMember(
+                document_id=document_id, ordinal=ordinal, publication_number=number
+            )
+        )
     if document.forward_citations is not None:
         for ordinal, number in enumerate(document.forward_citations.citing_publication_numbers, 1):
             session.add(
@@ -188,6 +195,12 @@ def load_document(session: Session, document_id: uuid.UUID) -> PatentDocument:
         .order_by(DocumentForwardCitation.ordinal)
     ).all()
 
+    members = session.scalars(
+        select(DocumentFamilyMember.publication_number)
+        .where(DocumentFamilyMember.document_id == document_id)
+        .order_by(DocumentFamilyMember.ordinal)
+    ).all()
+
     legal = None
     if row.legal_status_category is not None:
         if row.legal_status_raw is None or row.legal_status_as_of is None:
@@ -220,6 +233,7 @@ def load_document(session: Session, document_id: uuid.UUID) -> PatentDocument:
         application_number_raw=row.application_number_raw,
         family_id_simple=row.family_id_simple,
         family_id_extended=row.family_id_extended,
+        family_members=tuple(members) if present("family_members") else None,
         earliest_priority_date=row.earliest_priority_date,
         priorities=(
             tuple(

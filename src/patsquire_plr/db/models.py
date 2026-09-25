@@ -51,6 +51,7 @@ APPEND_ONLY_TABLES: tuple[str, ...] = (
     "document_classification",
     "document_citation",
     "document_forward_citation",
+    "document_family_member",
     "fact_computation",
     "fact",
     "audit_event",
@@ -317,6 +318,18 @@ class DocumentForwardCitation(Base):
         Integer, primary_key=True, doc="position in the source's list"
     )
     citing_publication_number: Mapped[str]
+
+
+class DocumentFamilyMember(Base):
+    """APPEND-ONLY. Publications the source states are in the document's simple family."""
+
+    __tablename__ = "document_family_member"
+
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("patent_document.id"), primary_key=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
+    publication_number: Mapped[str]
 
 
 # ------------------------------------------------------------------ fact store (Layer 3)

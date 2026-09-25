@@ -51,7 +51,7 @@ def test_migrations_produce_exactly_the_orm_schema(db_engine: Engine) -> None:
 
 
 def test_database_is_at_head(db_engine: Engine) -> None:
-    assert current_revision(db_engine) == "0004"
+    assert current_revision(db_engine) == "0005"
 
 
 def test_pgvector_extension_is_installed(db_engine: Engine) -> None:
@@ -68,7 +68,7 @@ def test_downgrade_to_base_and_upgrade_again(empty_db_engine: Engine) -> None:
     tables = set(inspect(empty_db_engine).get_table_names()) - {"alembic_version"}
     assert tables == set()
     upgrade(empty_db_engine)
-    assert current_revision(empty_db_engine) == "0004"
+    assert current_revision(empty_db_engine) == "0005"
 
 
 def test_migrations_refuse_to_run_without_a_supplied_connection() -> None:
@@ -173,6 +173,7 @@ def _rich_document(raw_record_id: uuid.UUID) -> PatentDocument:
         application_number_raw="EP20190001234",
         family_id_simple="54321",
         family_id_extended="98765",
+        family_members=("WO2015000001A1", "US20170000001A1"),
         earliest_priority_date=date(2019, 1, 2),
         priorities=(
             Priority(number_raw="GB 1900001", country="GB", date=date(2019, 1, 2)),
@@ -280,7 +281,7 @@ def test_cli_db_upgrade_and_current(
 
     assert before.stdout.strip() == "none", before.output
     assert upgraded.exit_code == 0, upgraded.output
-    assert upgraded.stdout.strip() == "database at revision 0004"
+    assert upgraded.stdout.strip() == "database at revision 0005"
 
 
 def test_repeated_codes_and_citations_are_stored_as_delivered(db_engine: Engine) -> None:

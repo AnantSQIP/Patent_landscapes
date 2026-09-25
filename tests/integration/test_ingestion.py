@@ -452,6 +452,6 @@ def test_resume_refuses_a_different_adapter_version(
     run_lookup_batch(db_engine, RawStore(object_storage), source, batch_id)
 
     upgraded = _source(_serve(_pages()))
-    upgraded._info = upgraded.info.model_copy(update={"adapter_version": "2"})
-    with pytest.raises(PlrError, match="created with adapter 1"):
+    upgraded._info = upgraded.info.model_copy(update={"adapter_version": "99"})
+    with pytest.raises(PlrError, match="created with adapter 2"):
         run_lookup_batch(db_engine, RawStore(object_storage), upgraded, batch_id)

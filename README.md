@@ -5,7 +5,8 @@ patent ID in a report must trace back to retrieved patent data through an audit 
 The full specification is in [`PLR_System_Build_Prompt.md`](PLR_System_Build_Prompt.md),
 and background on PLRs is in [`PLR_Complete_Guide.md`](PLR_Complete_Guide.md).
 
-**Status:** Phase 0 (project foundation) is implemented. See [`CHANGELOG.md`](CHANGELOG.md).
+**Status:** Phase 0 (foundation) is done; Phase 1 (reference analysis and template
+specification) is awaiting review. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Quick start (WSL / Linux)
 
@@ -45,6 +46,11 @@ Secrets are masked in `repr`, in `plr config show` and in logs. See
 |---|---|
 | `plr health` | Checks Postgres (and that pgvector is available), Redis and the object-storage bucket. Prints a JSON report and exits 1 on any failure. |
 | `plr config show` | Prints the resolved configuration with secrets masked. |
+| `plr reference extract` | Extracts headings and captions from `reference/*.pdf` to `reference/extracted/` (git-ignored). |
+| `plr reference render PDF PAGES...` | Renders pages to PNG to inspect charts. |
+| `plr reference check-originality FILES...` | Fails if FILES share an 8-word phrase with reference headings or captions. |
+| `plr template validate` | Validates `template/plr_template.yaml` and its cross-references. |
+| `plr template definitions` | Prints `docs/definitions.md`, which is generated from the template. |
 
 ## Tests
 
@@ -66,6 +72,7 @@ scripts/             operational scripts (backup.sh)
 tests/unit/          fast tests, no services
 tests/integration/   testcontainers-backed tests
 config/              committed non-secret configuration
+template/            report template specification (plr_template.yaml)
 docker/              container images
 docs/adr/            architecture decision records
 reference/           reference PLR PDFs (git-ignored, copyrighted)

@@ -20,7 +20,7 @@
 
 # Reference reports are third-party copyrighted material: keep them local only.
 *.pdf
-reference/
+/reference/
 
 # Python
 __pycache__/

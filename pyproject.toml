@@ -5,8 +5,10 @@ description = "Patsquire automated Patent Landscape Report (PLR) system"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "alembic>=1.14",
     "boto3>=1.35",
     "pdfplumber>=0.11",
+    "pgvector>=0.3",
     "psycopg[binary]>=3.2",
     "pydantic>=2.9",
     "python-dotenv>=1.0",

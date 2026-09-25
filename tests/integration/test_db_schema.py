@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -51,7 +52,7 @@ def test_migrations_produce_exactly_the_orm_schema(db_engine: Engine) -> None:
 
 
 def test_database_is_at_head(db_engine: Engine) -> None:
-    assert current_revision(db_engine) == "0005"
+    assert current_revision(db_engine) == "0006"
 
 
 def test_pgvector_extension_is_installed(db_engine: Engine) -> None:
@@ -68,7 +69,7 @@ def test_downgrade_to_base_and_upgrade_again(empty_db_engine: Engine) -> None:
     tables = set(inspect(empty_db_engine).get_table_names()) - {"alembic_version"}
     assert tables == set()
     upgrade(empty_db_engine)
-    assert current_revision(empty_db_engine) == "0005"
+    assert current_revision(empty_db_engine) == "0006"
 
 
 def test_migrations_refuse_to_run_without_a_supplied_connection() -> None:
@@ -281,7 +282,7 @@ def test_cli_db_upgrade_and_current(
 
     assert before.stdout.strip() == "none", before.output
     assert upgraded.exit_code == 0, upgraded.output
-    assert upgraded.stdout.strip() == "database at revision 0005"
+    assert upgraded.stdout.strip() == "database at revision 0006"
 
 
 def test_repeated_codes_and_citations_are_stored_as_delivered(db_engine: Engine) -> None:
@@ -314,3 +315,46 @@ def test_ingest_batch_requires_the_provider_api_version(db_engine: Engine) -> No
                 "started_at, status) VALUES (gen_random_uuid(), 's', 't', 'v', now(), 'running')"
             )
         )
+
+
+OLD_BATCH_SQL = """
+    INSERT INTO ingest_batch (id, source_id, source_type, adapter_version, source_api_version,
+                              started_at, status)
+    VALUES (gen_random_uuid(), 's', 't', '1', 'v', now(), 'complete') RETURNING id
+"""
+OLD_RAW_SQL = """
+    INSERT INTO raw_record (id, batch_id, source_record_key, object_key, sha256, content_type,
+                            byte_size, retrieved_at)
+    VALUES (gen_random_uuid(), :b, 'k', 'o', :h, 'text/html', 0, now()) RETURNING id
+"""
+OLD_DOCUMENT_SQL = """
+    INSERT INTO patent_document (id, raw_record_id, raw_pointer, source_id, publication_country,
+                                 publication_number, publication_kind, publication_number_raw,
+                                 missing)
+    VALUES (gen_random_uuid(), :r, 'p', 's', 'US', '1', 'B1', 'US1B1', CAST(:m AS jsonb))
+    RETURNING id
+"""
+
+
+def test_documents_stored_before_family_members_existed_load_as_not_requested(
+    empty_db_engine: Engine,
+) -> None:
+    upgrade(empty_db_engine, "0004")
+    missing = {
+        f: "not_provided_by_source" for f in CANONICAL_OPTIONAL_FIELDS if f != "family_members"
+    }
+    with Session(empty_db_engine) as session, session.begin():
+        batch_id: uuid.UUID = session.execute(text(OLD_BATCH_SQL)).scalar_one()
+        raw_id: uuid.UUID = session.execute(
+            text(OLD_RAW_SQL), {"b": batch_id, "h": "0" * 64}
+        ).scalar_one()
+        doc_id: uuid.UUID = session.execute(
+            text(OLD_DOCUMENT_SQL), {"r": raw_id, "m": json.dumps(missing)}
+        ).scalar_one()
+
+    upgrade(empty_db_engine)
+
+    with Session(empty_db_engine) as session:
+        document = load_document(session, doc_id)
+    assert document.family_members is None
+    assert document.missing["family_members"] is MissingReason.NOT_REQUESTED

@@ -44,6 +44,10 @@ class _Strict(BaseModel):
 
 # ------------------------------------------------------------------ identifiers
 
+# Offices whose publication numbers end in a check letter before the kind code, e.g.
+# Singapore "SG10201707936TA" = number 10201707936T, kind A (IPOS numbering).
+OFFICES_WITH_CHECK_LETTER = frozenset({"SG"})
+
 _PUB_NUMBER = re.compile(r"^(?P<country>[A-Z]{2})(?P<number>[0-9A-Z]+?)(?P<kind>[A-Z][0-9]?)?$")
 
 
@@ -72,7 +76,8 @@ def normalize_publication_number(raw: str) -> PublicationNumber:
     if match is None or not any(c.isdigit() for c in match["number"]):
         raise NormalizationError(f"unrecognised publication number: {raw!r}")
     number, kind = match["number"], match["kind"]
-    if kind is not None and not number[-1].isdigit():
+    check_letter_ok = match["country"] in OFFICES_WITH_CHECK_LETTER and number[:-1].isdigit()
+    if kind is not None and not number[-1].isdigit() and not check_letter_ok:
         raise NormalizationError(f"ambiguous kind code in publication number: {raw!r}")
     return PublicationNumber(country=match["country"], number=number, kind=kind)
 

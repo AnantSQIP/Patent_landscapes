@@ -266,7 +266,7 @@ def _record(
                 outcome="quarantined" if reasons else "stored",
                 raw_record_id=raw.id,
                 document_count=len(stored),
-                detail="; ".join(reasons) or None,
+                detail="; ".join(reasons or normalized.warnings) or None,
             )
         )
 

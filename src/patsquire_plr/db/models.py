@@ -52,6 +52,12 @@ APPEND_ONLY_TABLES: tuple[str, ...] = (
     "document_citation",
     "document_forward_citation",
     "document_family_member",
+    "dataset",
+    "dataset_document",
+    "dataset_conflict",
+    "dataset_family",
+    "dataset_family_member",
+    "dataset_applicant",
     "fact_computation",
     "fact",
     "audit_event",
@@ -330,6 +336,94 @@ class DocumentFamilyMember(Base):
     )
     ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
     publication_number: Mapped[str]
+
+
+# ------------------------------------------------------------------ datasets (Phase 4)
+
+
+class Dataset(Base):
+    """APPEND-ONLY. An immutable analysis snapshot built from ingest batches."""
+
+    __tablename__ = "dataset"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    created_at: Mapped[datetime] = _created_at()
+    name: Mapped[str]
+    batch_ids: Mapped[list[object]]
+    config: Mapped[dict[str, object]]
+    input_documents: Mapped[int] = mapped_column(Integer)
+    publications: Mapped[int] = mapped_column(Integer)
+    families: Mapped[int] = mapped_column(Integer)
+
+
+class DatasetDocument(Base):
+    """APPEND-ONLY. The decision for every input document (conservation, Layer 2)."""
+
+    __tablename__ = "dataset_document"
+    __table_args__ = (
+        CheckConstraint("decision IN ('selected', 'excluded')", name="decision"),
+        CheckConstraint(
+            "(decision = 'excluded') = (reason IS NOT NULL)", name="reason_iff_excluded"
+        ),
+    )
+
+    dataset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dataset.id"), primary_key=True)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("patent_document.id"), primary_key=True
+    )
+    publication: Mapped[str]
+    decision: Mapped[str]
+    reason: Mapped[str | None]
+    detail: Mapped[str | None]
+
+
+class DatasetConflict(Base):
+    """APPEND-ONLY. A field on which copies of one publication disagree."""
+
+    __tablename__ = "dataset_conflict"
+
+    dataset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dataset.id"), primary_key=True)
+    publication: Mapped[str] = mapped_column(primary_key=True)
+    field: Mapped[str] = mapped_column(primary_key=True)
+    values: Mapped[dict[str, object]]
+
+
+class DatasetFamily(Base):
+    """APPEND-ONLY."""
+
+    __tablename__ = "dataset_family"
+
+    dataset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dataset.id"), primary_key=True)
+    family_key: Mapped[str] = mapped_column(primary_key=True)
+    evidence: Mapped[list[object]]
+    publications_in_dataset: Mapped[int] = mapped_column(Integer)
+    stated_members_not_retrieved: Mapped[int] = mapped_column(Integer)
+
+
+class DatasetFamilyMember(Base):
+    """APPEND-ONLY. A publication is in exactly one family per dataset."""
+
+    __tablename__ = "dataset_family_member"
+
+    dataset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dataset.id"), primary_key=True)
+    publication: Mapped[str] = mapped_column(primary_key=True)
+    family_key: Mapped[str]
+    in_dataset: Mapped[bool] = mapped_column(Boolean)
+
+
+class DatasetApplicant(Base):
+    """APPEND-ONLY. Every applicant of every selected publication, with its merge trail."""
+
+    __tablename__ = "dataset_applicant"
+
+    dataset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dataset.id"), primary_key=True)
+    publication: Mapped[str] = mapped_column(primary_key=True)
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name_raw: Mapped[str]
+    name_key: Mapped[str]
+    entity_name: Mapped[str]
+    rule_steps: Mapped[list[object]]
+    alias_reason: Mapped[str | None]
 
 
 # ------------------------------------------------------------------ fact store (Layer 3)

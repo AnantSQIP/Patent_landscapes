@@ -310,7 +310,7 @@ def test_source_identifies_its_format_version() -> None:
     assert (info.source_id, info.source_type, info.adapter_version) == (
         "google_patents",
         "google_patents_page",
-        "2",
+        "3",
     )
     assert info.source_api_version == SOURCE_API_VERSION
 
@@ -383,3 +383,20 @@ def test_family_members_are_the_also_published_as_table() -> None:
 def test_family_members_never_include_the_document_itself(number: str) -> None:
     d = _parse(number)
     assert d.family_members is None or number not in d.family_members
+
+
+def test_one_unparseable_family_member_marks_only_that_field() -> None:
+    page = _page("US10000000B2").replace(
+        b'<span itemprop="publicationNumber">JP7098706B2</span>',
+        b'<span itemprop="publicationNumber">XX123ABC</span>',
+        1,
+    )
+    result = _source().normalize(page, raw_record_id=uuid.UUID(int=1), retrieved_at=RETRIEVED)
+    assert result.quarantine_reasons == ()
+    [(d, _)] = result.documents
+    assert d.family_members is None
+    assert d.missing["family_members"] is MissingReason.UNPARSEABLE
+    assert d.title == "Coherent LADAR using intra-pixel quadrature detection"  # rest intact
+    assert result.warnings == (
+        "family_members: ambiguous kind code in publication number: 'XX123ABC'",
+    )

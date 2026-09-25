@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 from typing import Annotated
 
@@ -17,6 +18,14 @@ from patsquire_plr.gateway.health import check_models
 from patsquire_plr.gateway.secrets import SecretResolver
 from patsquire_plr.gateway.store import PostgresCallStore
 from patsquire_plr.health import default_checks, run_checks
+from patsquire_plr.ingest.rawstore import RawStore
+from patsquire_plr.ingest.runner import (
+    BatchBusyError,
+    ReconciliationError,
+    run_lookup_batch,
+    start_lookup_batch,
+)
+from patsquire_plr.ingest.sources import build_source
 from patsquire_plr.log import configure_logging
 from patsquire_plr.reference.extract import (
     ExtractionError,
@@ -40,6 +49,8 @@ db_app = typer.Typer(no_args_is_help=True, help="Database schema migrations.")
 app.add_typer(db_app, name="db")
 models_app = typer.Typer(no_args_is_help=True, help="Model backends and roles.")
 app.add_typer(models_app, name="models")
+ingest_app = typer.Typer(no_args_is_help=True, help="Ingest patent records from data sources.")
+app.add_typer(ingest_app, name="ingest")
 
 TemplateOption = Annotated[Path, typer.Option("--template", help="Template specification YAML.")]
 DEFAULT_TEMPLATE = Path("template/plr_template.yaml")
@@ -253,3 +264,60 @@ def models_health(
     )
     if not healthy:
         raise typer.Exit(code=1)
+
+
+def _run_batch(
+    settings: Settings, source_id: str, batch_id: uuid.UUID | None, keys: list[str]
+) -> None:
+    if source_id not in settings.data_sources:
+        typer.echo(
+            f"unknown data source '{source_id}' (configured: {sorted(settings.data_sources)})",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    source = build_source(source_id, settings.data_sources[source_id])
+    engine = create_db_engine(settings.database)
+    try:
+        batch = batch_id or start_lookup_batch(engine, source, keys)
+        # Printed first so a crashed run can always be resumed with this ID.
+        typer.echo(f"batch {batch} (resume with: plr ingest resume {batch})", err=True)
+        report = run_lookup_batch(engine, RawStore(settings.object_storage), source, batch)
+    except (ReconciliationError, BatchBusyError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+    typer.echo(report.model_dump_json(indent=2))
+    if report.status != "complete":
+        raise typer.Exit(code=1)
+
+
+@ingest_app.command("lookup")
+def ingest_lookup(
+    numbers: Annotated[list[str] | None, typer.Argument(help="Publication numbers.")] = None,
+    source: Annotated[str, typer.Option(help="Configured data source ID.")] = "google_patents",
+    numbers_file: Annotated[
+        Path | None, typer.Option(help="File with one number per line.")
+    ] = None,
+    config_file: ConfigFileOption = DEFAULT_CONFIG_FILE,
+    env_file: EnvFileOption = None,
+) -> None:
+    """Fetch publications by number, store raw payloads, normalise, reconcile."""
+    keys = list(numbers or [])
+    if numbers_file is not None:
+        keys += numbers_file.read_text(encoding="utf-8").splitlines()
+    if not keys:
+        typer.echo("give publication numbers as arguments or --numbers-file", err=True)
+        raise typer.Exit(code=2)
+    _run_batch(_load(config_file, env_file), source, None, keys)
+
+
+@ingest_app.command("resume")
+def ingest_resume(
+    batch_id: Annotated[uuid.UUID, typer.Argument(help="Batch to resume.")],
+    source: Annotated[str, typer.Option(help="Configured data source ID.")] = "google_patents",
+    config_file: ConfigFileOption = DEFAULT_CONFIG_FILE,
+    env_file: EnvFileOption = None,
+) -> None:
+    """Retry only the items of a batch whose latest outcome is 'failed', then reconcile."""
+    _run_batch(_load(config_file, env_file), source, batch_id, [])

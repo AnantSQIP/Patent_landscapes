@@ -5,8 +5,7 @@ patent ID in a report must trace back to retrieved patent data through an audit 
 The full specification is in [`PLR_System_Build_Prompt.md`](PLR_System_Build_Prompt.md),
 and background on PLRs is in [`PLR_Complete_Guide.md`](PLR_Complete_Guide.md).
 
-**Status:** Phases 0–1 are done. Phase 2 (data model, provenance, fact store, audit log and
-model gateway) is awaiting review. See [`CHANGELOG.md`](CHANGELOG.md).
+**Status:** Phases 0–2 are done. Phase 3 (patent data ingestion) is in review. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Quick start (WSL / Linux)
 
@@ -53,6 +52,8 @@ Secrets are masked in `repr`, in `plr config show` and in logs. See
 | `plr template definitions` | Prints `docs/definitions.md`, which is generated from the template. |
 | `plr db upgrade` / `plr db current` | Applies or shows database migrations. |
 | `plr models health` | Makes a real call to every model role (see Models below). Exits 1 on any failure. |
+| `plr ingest lookup NUMBERS... [--numbers-file F]` | Fetches publications by number from a data source, stores the raw pages, normalises and reconciles them. Exits 1 if any item failed. |
+| `plr ingest resume BATCH_ID` | Retries only the failed items of a batch. |
 
 ## Tests
 

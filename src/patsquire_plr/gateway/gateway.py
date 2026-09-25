@@ -49,11 +49,11 @@ from patsquire_plr.gateway.providers.base import (
 from patsquire_plr.gateway.providers.bedrock import BedrockAdapter
 from patsquire_plr.gateway.providers.gemini import GeminiAdapter
 from patsquire_plr.gateway.providers.openai_compatible import OpenAICompatibleAdapter
-from patsquire_plr.gateway.ratelimit import RateLimiter
 from patsquire_plr.gateway.schema import strict_json_schema
 from patsquire_plr.gateway.secrets import SecretResolver
 from patsquire_plr.gateway.store import CallRecord, CallStore
 from patsquire_plr.log import get_logger
+from patsquire_plr.ratelimit import RateLimiter
 
 _log = get_logger(__name__)
 

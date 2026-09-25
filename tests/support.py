@@ -39,6 +39,16 @@ def base_config() -> dict[str, dict[str, object]]:
             "read_timeout_s": 5,
         },
         "models": base_models_config(),
+        "data_sources": {
+            "google_patents": {
+                "type": "google_patents_page",
+                "base_url": "https://patents.google.com",
+                "user_agent": "patsquire-plr-tests",
+                "requests_per_minute": 60,
+                "timeout_s": 5,
+                "max_retries": 1,
+            }
+        },
     }
 
 

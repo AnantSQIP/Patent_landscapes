@@ -42,6 +42,7 @@ NAMING_CONVENTION = {
 
 # Tables whose rows can never be updated or deleted once written.
 APPEND_ONLY_TABLES: tuple[str, ...] = (
+    "ingest_item",
     "raw_record",
     "quarantined_record",
     "patent_document",
@@ -127,6 +128,38 @@ class RawRecord(Base):
     retrieved_at: Mapped[datetime]
 
 
+class IngestItem(Base):
+    """APPEND-ONLY. One outcome per requested record per attempt (reconciliation, resume).
+
+    The latest row for a ``requested_key`` within a batch is its current state; a resumed
+    batch appends new rows for items that previously failed.
+    """
+
+    __tablename__ = "ingest_item"
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('stored', 'quarantined', 'duplicate', 'not_found', 'invalid_request', "
+            "'failed')",
+            name="outcome",
+        ),
+        CheckConstraint(
+            "(outcome IN ('stored', 'quarantined', 'duplicate')) = (raw_record_id IS NOT NULL)",
+            name="raw_record_iff_fetched",
+        ),
+        CheckConstraint("document_count >= 0", name="document_count_non_negative"),
+        Index("ix_ingest_item_batch_key", "batch_id", "requested_key"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    batch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ingest_batch.id"))
+    requested_key: Mapped[str]
+    outcome: Mapped[str]
+    raw_record_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("raw_record.id"))
+    document_count: Mapped[int] = mapped_column(Integer)
+    detail: Mapped[str | None]
+    created_at: Mapped[datetime] = _created_at()
+
+
 class QuarantinedRecord(Base):
     """APPEND-ONLY. A raw record (or part of one) that failed validation, with reasons."""
 
@@ -147,7 +180,7 @@ class PatentDocumentRow(Base):
         CheckConstraint("publication_country ~ '^[A-Z]{2}$'", name="publication_country"),
         CheckConstraint(
             "legal_status_category IS NULL OR legal_status_category IN ('pending', 'granted', "
-            "'lapsed', 'expired', 'withdrawn', 'refused', 'revoked', 'other')",
+            "'active', 'lapsed', 'expired', 'withdrawn', 'refused', 'revoked', 'other')",
             name="legal_status_category",
         ),
         CheckConstraint(

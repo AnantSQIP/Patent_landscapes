@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install (locked)
+        run: uv sync --frozen
+      - name: Lint
+        run: uv run ruff check
+      - name: Format
+        run: uv run ruff format --check
+      - name: Type check
+        run: uv run mypy
+      # One pytest run over unit + integration tests (testcontainers uses the runner's
+      # Docker), so the coverage gate applies to the whole suite.
+      - name: Tests + coverage
+        run: uv run pytest --cov --cov-report=term-missing
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create CI .env from the example
+        run: cp .env.example .env
+      - name: Start services and run `plr health` inside the app image
+        run: |
+          docker compose --env-file .env up -d --wait postgres redis minio
+          docker compose --env-file .env run --rm minio-init
+          docker compose --env-file .env --profile app run --rm app
+      - name: Service logs on failure
+        if: failure()
+        run: docker compose --env-file .env logs
+      - name: Tear down
+        if: always()
+        run: docker compose --env-file .env down -v

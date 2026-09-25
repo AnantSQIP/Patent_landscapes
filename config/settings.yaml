@@ -1,0 +1,30 @@
+# Non-secret settings for local development against docker-compose.
+# Every key is required. Secrets (database.password, object_storage.access_key_id,
+# object_storage.secret_access_key) are NOT allowed here: set them in .env or the
+# environment, e.g. PLR__DATABASE__PASSWORD. See .env.example.
+# Any key can be overridden by PLR__<SECTION>__<KEY> environment variables.
+
+app:
+  environment: dev
+  log_level: INFO
+
+database:
+  host: localhost
+  port: 55432
+  name: plr
+  user: plr
+  connect_timeout_s: 5
+
+redis:
+  host: localhost
+  port: 56379
+  db: 0
+  password: null  # local Redis runs without auth; set PLR__REDIS__PASSWORD in production
+  socket_timeout_s: 5
+
+object_storage:
+  endpoint_url: http://localhost:59000
+  region: us-east-1
+  bucket: plr-artifacts
+  connect_timeout_s: 5
+  read_timeout_s: 10

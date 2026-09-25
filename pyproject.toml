@@ -6,7 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.14",
+    "anthropic>=1.8",
     "boto3>=1.35",
+    "google-genai>=2.25",
+    "openai>=3.19",
     "pdfplumber>=0.11",
     "pgvector>=0.3",
     "psycopg[binary]>=3.2",
@@ -24,7 +27,7 @@ plr = "patsquire_plr.cli:app"
 
 [dependency-groups]
 dev = [
-    "boto3-stubs[s3]>=1.35",
+    "boto3-stubs[bedrock-runtime,s3]>=1.35",
     "fpdf2>=2.8",
     "hypothesis>=6.120",
     "mypy>=1.13",

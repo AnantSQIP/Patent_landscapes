@@ -28,3 +28,29 @@ object_storage:
   bucket: plr-artifacts
   connect_timeout_s: 5
   read_timeout_s: 10
+
+# Model backends and roles (build prompt §4). Change where models run by editing this block
+# only. API keys are never written here: api_key_env names the environment variable (in
+# .env or the process environment) that holds the key.
+models:
+  backends:
+    local_ollama:              # on-prem CPU/GPU via Ollama's OpenAI-compatible API
+      type: openai_compatible
+      base_url: http://localhost:11434/v1
+      api_key_env: null        # Ollama needs no key
+      region: null
+      max_tokens_field: max_tokens   # Ollama/vLLM accept max_tokens
+      timeout_s: 120
+      max_retries: 2
+      requests_per_minute: 120
+  roles:
+    embedding:
+      {backend: local_ollama, model: "all-minilm:22m", max_output_tokens: null, temperature: null, seed: null, max_schema_retries: 0, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
+    bulk_classifier:
+      {backend: local_ollama, model: "qwen2.5:0.5b", max_output_tokens: 512, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
+    reasoner:
+      {backend: local_ollama, model: "qwen2.5:0.5b", max_output_tokens: 2048, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
+    writer:
+      {backend: local_ollama, model: "qwen2.5:0.5b", max_output_tokens: 2048, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
+    critic:
+      {backend: local_ollama, model: "qwen2.5:0.5b", max_output_tokens: 1024, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}

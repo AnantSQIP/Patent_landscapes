@@ -26,12 +26,13 @@ from __future__ import annotations
 import os
 import types
 from collections.abc import Mapping
+from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Literal, Union, get_args, get_origin
+from typing import Annotated, Literal, Self, Union, get_args, get_origin
 
 import yaml
 from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
 from sqlalchemy.engine import URL
 
 from patsquire_plr.errors import ConfigError
@@ -92,11 +93,116 @@ class ObjectStorageSettings(_Section):
     read_timeout_s: float = Field(gt=0, le=3600)
 
 
+BackendType = Literal["openai_compatible", "anthropic", "gemini", "bedrock"]
+ModelRole = Literal["embedding", "bulk_classifier", "reasoner", "writer", "critic"]
+MODEL_ROLES: tuple[ModelRole, ...] = (
+    "embedding",
+    "bulk_classifier",
+    "reasoner",
+    "writer",
+    "critic",
+)
+_ENV_NAME = r"^[A-Z][A-Z0-9_]*$"
+
+
+class BackendSettings(_Section):
+    """Where models run. Credentials are referenced by environment-variable *name* only."""
+
+    type: BackendType
+    base_url: str | None = Field(
+        pattern=r"^https?://", description="required for openai_compatible (vLLM, SGLang, Ollama)"
+    )
+    api_key_env: str | None = Field(pattern=_ENV_NAME, description="env var holding the API key")
+    region: str | None = Field(description="AWS region (bedrock)")
+    max_tokens_field: Literal["max_tokens", "max_completion_tokens"] | None = Field(
+        description="openai_compatible only: the token-limit parameter this server accepts"
+    )
+    timeout_s: float = Field(gt=0, le=3600)
+    max_retries: int = Field(ge=0, le=10)
+    requests_per_minute: int = Field(ge=1, le=100_000)
+
+    @model_validator(mode="after")
+    def _type_specific(self) -> Self:
+        problems = []
+        if self.type == "openai_compatible" and self.base_url is None:
+            problems.append("openai_compatible backends need base_url")
+        if (self.type == "openai_compatible") != (self.max_tokens_field is not None):
+            problems.append("max_tokens_field is required for, and only for, openai_compatible")
+        if self.type == "bedrock" and self.api_key_env is not None:
+            problems.append("bedrock uses the AWS credential chain; api_key_env must be null")
+        if self.type in ("anthropic", "gemini") and self.api_key_env is None:
+            problems.append(f"{self.type} backends need api_key_env")
+        if self.type == "bedrock" and self.region is None:
+            problems.append("bedrock backends need region")
+        if self.type != "openai_compatible" and self.base_url is not None:
+            problems.append(f"base_url is only used by openai_compatible, not {self.type}")
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
+
+
+class RoleSettings(_Section):
+    backend: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    max_output_tokens: int | None = Field(ge=1, le=200_000, description="None for embedding")
+    temperature: float | None = Field(ge=0, le=2, description="None = provider does not accept it")
+    seed: int | None = Field(description="None = provider does not accept it")
+    max_schema_retries: int = Field(ge=0, le=5)
+    input_price_per_mtok_usd: Decimal | None = Field(ge=0)
+    output_price_per_mtok_usd: Decimal | None = Field(ge=0)
+
+
+class ModelsSettings(_Section):
+    backends: dict[str, BackendSettings] = Field(min_length=1)
+    roles: dict[ModelRole, RoleSettings]
+
+    @model_validator(mode="after")
+    def _roles_complete_and_resolvable(self) -> Self:
+        problems = []
+        if missing := [r for r in MODEL_ROLES if r not in self.roles]:
+            problems.append(f"roles not configured: {missing}")
+        for role, config in self.roles.items():
+            if config.backend not in self.backends:
+                problems.append(f"role {role} uses unknown backend '{config.backend}'")
+            elif role == "embedding" and self.backends[config.backend].type == "anthropic":
+                problems.append(
+                    "role embedding cannot use an anthropic backend (no embeddings API)"
+                )
+            backend_type = (
+                self.backends[config.backend].type if config.backend in self.backends else None
+            )
+            if backend_type == "anthropic" and (config.temperature, config.seed) != (None, None):
+                problems.append(
+                    f"role {role}: the Anthropic API no longer accepts temperature or seed; "
+                    "set both to null (reproducibility comes from the response cache)"
+                )
+            if backend_type == "bedrock" and config.seed is not None:
+                problems.append(f"role {role}: Bedrock Converse has no seed; set seed to null")
+            if role == "embedding" and config.max_output_tokens is not None:
+                problems.append("role embedding must set max_output_tokens to null")
+            if role != "embedding" and config.max_output_tokens is None:
+                problems.append(f"role {role} needs max_output_tokens")
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
+
+    def warnings(self) -> list[str]:
+        """Non-blocking advice, surfaced by `plr models health` (build prompt §4)."""
+        writer, critic = self.roles.get("writer"), self.roles.get("critic")
+        if writer and critic and (writer.backend, writer.model) == (critic.backend, critic.model):
+            return [
+                "critic uses the same backend and model as writer; "
+                "an independent model is recommended"
+            ]
+        return []
+
+
 class Settings(_Section):
     app: AppSettings
     database: DatabaseSettings
     redis: RedisSettings
     object_storage: ObjectStorageSettings
+    models: ModelsSettings
 
 
 def secret_field_paths(

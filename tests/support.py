@@ -38,6 +38,45 @@ def base_config() -> dict[str, dict[str, object]]:
             "connect_timeout_s": 2,
             "read_timeout_s": 5,
         },
+        "models": base_models_config(),
+    }
+
+
+def _role(model: str, *, max_output_tokens: int | None = 256) -> dict[str, object]:
+    return {
+        "backend": "local",
+        "model": model,
+        "max_output_tokens": max_output_tokens,
+        "temperature": 0,
+        "seed": 7,
+        "max_schema_retries": 1,
+        "input_price_per_mtok_usd": None,
+        "output_price_per_mtok_usd": None,
+    }
+
+
+def base_models_config() -> dict[str, object]:
+    """A complete, valid ``models`` section (fresh copy each call)."""
+    return {
+        "backends": {
+            "local": {
+                "type": "openai_compatible",
+                "base_url": "http://localhost:11434/v1",
+                "api_key_env": None,
+                "region": None,
+                "max_tokens_field": "max_tokens",
+                "timeout_s": 30,
+                "max_retries": 1,
+                "requests_per_minute": 600,
+            }
+        },
+        "roles": {
+            "embedding": _role("embed-model", max_output_tokens=None),
+            "bulk_classifier": _role("chat-model"),
+            "reasoner": _role("chat-model"),
+            "writer": _role("chat-model"),
+            "critic": _role("critic-model"),
+        },
     }
 
 

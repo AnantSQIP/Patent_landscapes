@@ -24,6 +24,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import partial
 
 from pydantic import BaseModel, ValidationError
 
@@ -69,6 +70,7 @@ class _CallContext:
     prompt: PromptTemplate | None
     key: str
     operation: str
+    batch_keys: tuple[str, ...] = ()  # embedding batches: the cache key of every text sent
 
 
 @dataclass(frozen=True)
@@ -193,6 +195,7 @@ class ModelGateway:
         if use_cache:
             cached = self._cached(ctx)
             if cached is not None:
+                # The cached text is exactly the response that passed validation before.
                 value = output_model.model_validate_json(str(cached["json"]), strict=True)
                 return StructuredResult(
                     value=value, cached=True, backend=role_cfg.backend, model=role_cfg.model
@@ -231,7 +234,7 @@ class ModelGateway:
                 backend=role_cfg.backend,
                 model=role_cfg.model,
                 operation="structured",
-                response={"json": value.model_dump_json()},
+                response={"json": response.text},
             )
             return StructuredResult(
                 value=value, cached=False, backend=role_cfg.backend, model=role_cfg.model
@@ -250,25 +253,37 @@ class ModelGateway:
         vectors: dict[int, tuple[float, ...]] = {}
         if use_cache:
             for i, key in enumerate(keys):
-                cached = self._store.get_cached(key)
-                if cached is not None:
-                    vectors[i] = _vector(cached)
+                hit = self._cached(
+                    _CallContext(
+                        role=role, role_cfg=role_cfg, prompt=None, key=key, operation="embed"
+                    )
+                )
+                if hit is not None:
+                    vectors[i] = _vector(hit)
         missing = [i for i in range(len(texts)) if i not in vectors]
-        if missing:
-            batch = [texts[i] for i in missing]
+        adapter = self._adapter(role_cfg.backend)
+        size = adapter.max_texts_per_request or len(missing) or 1
+        for start in range(0, len(missing), size):
+            chunk = missing[start : start + size]
+            batch = [texts[i] for i in chunk]
+            batch_keys = tuple(keys[i] for i in chunk)
             ctx = _CallContext(
-                role=role, role_cfg=role_cfg, prompt=None, key=keys[missing[0]], operation="embed"
+                role=role,
+                role_cfg=role_cfg,
+                prompt=None,
+                key=canonical_sha256(list(batch_keys)),
+                operation="embed",
+                batch_keys=batch_keys,
             )
             response = self._with_retries(
-                ctx,
-                lambda: self._adapter(role_cfg.backend).embed(model=role_cfg.model, texts=batch),
+                ctx, partial(adapter.embed, model=role_cfg.model, texts=batch)
             )
             if len(response.vectors) != len(batch):
                 raise PermanentProviderError(
                     f"{role_cfg.backend}: {len(batch)} texts sent, "
                     f"{len(response.vectors)} vectors returned"
                 )
-            for i, vector in zip(missing, response.vectors, strict=True):
+            for i, vector in zip(chunk, response.vectors, strict=True):
                 vectors[i] = vector
                 self._store.put_cached(
                     keys[i],
@@ -322,12 +337,11 @@ class ModelGateway:
         *,
         schema: dict[str, object] | None,
     ) -> str:
-        backend = self._models.backends[role_cfg.backend]
         return canonical_sha256(
             {
                 "operation": "structured" if schema is not None else "text",
                 "backend": role_cfg.backend,
-                "backend_type": backend.type,
+                "server": self._server_identity(role_cfg.backend),
                 "model": role_cfg.model,
                 "params": {
                     "max_output_tokens": role_cfg.max_output_tokens,
@@ -343,11 +357,17 @@ class ModelGateway:
             }
         )
 
+    def _server_identity(self, backend_name: str) -> dict[str, object]:
+        """Which server answers: pointing a backend elsewhere must not reuse old answers."""
+        backend = self._models.backends[backend_name]
+        return {"type": backend.type, "base_url": backend.base_url, "region": backend.region}
+
     def _embed_key(self, role_cfg: RoleSettings, text: str) -> str:
         return canonical_sha256(
             {
                 "operation": "embed",
                 "backend": role_cfg.backend,
+                "server": self._server_identity(role_cfg.backend),
                 "model": role_cfg.model,
                 "text": text,
             }
@@ -433,6 +453,7 @@ class ModelGateway:
             output = {
                 "count": len(response.vectors),
                 "dimensions": len(response.vectors[0]) if response.vectors else 0,
+                "cache_keys": list(ctx.batch_keys),
             }
             input_tokens, model_reported = response.input_tokens, response.model_reported
         role_cfg = ctx.role_cfg
@@ -497,6 +518,18 @@ class ModelGateway:
                     error=str(exc),
                 )
                 raise
+            except Exception as exc:
+                # Anything an adapter failed to classify is still logged, then surfaces as a
+                # permanent failure (never retried blindly, never swallowed).
+                message = f"unclassified {type(exc).__name__}: {exc}"
+                self._log_attempt(
+                    ctx,
+                    attempt=attempt,
+                    response=None,
+                    latency_ms=self._ms_since(started),
+                    error=message,
+                )
+                raise PermanentProviderError(message) from exc
             if isinstance(response, ChatResponse | EmbeddingResponse):
                 self._log_attempt(
                     ctx,

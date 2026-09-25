@@ -151,6 +151,29 @@ class RoleSettings(_Section):
     input_price_per_mtok_usd: Decimal | None = Field(ge=0)
     output_price_per_mtok_usd: Decimal | None = Field(ge=0)
 
+    @model_validator(mode="after")
+    def _prices_come_in_pairs(self) -> Self:
+        if (self.input_price_per_mtok_usd is None) != (self.output_price_per_mtok_usd is None):
+            raise ValueError(
+                "set both input_price_per_mtok_usd and output_price_per_mtok_usd, or neither "
+                "(a single price cannot produce a cost estimate)"
+            )
+        return self
+
+
+def _reproducibility_problems(
+    role: str, backend_type: str | None, config: RoleSettings
+) -> list[str]:
+    """Build prompt principle 6: temperature 0 and a fixed seed wherever the provider allows."""
+    if role == "embedding" or backend_type is None or backend_type == "anthropic":
+        return []  # Anthropic accepts neither (checked separately); embeddings take neither
+    problems = []
+    if config.temperature != 0:
+        problems.append(f"role {role}: temperature must be 0 for reproducible output")
+    if backend_type in ("openai_compatible", "gemini") and config.seed is None:
+        problems.append(f"role {role}: set a fixed seed; {backend_type} supports one")
+    return problems
+
 
 class ModelsSettings(_Section):
     backends: dict[str, BackendSettings] = Field(min_length=1)
@@ -178,6 +201,7 @@ class ModelsSettings(_Section):
                 )
             if backend_type == "bedrock" and config.seed is not None:
                 problems.append(f"role {role}: Bedrock Converse has no seed; set seed to null")
+            problems += _reproducibility_problems(role, backend_type, config)
             if role == "embedding" and config.max_output_tokens is not None:
                 problems.append("role embedding must set max_output_tokens to null")
             if role != "embedding" and config.max_output_tokens is None:

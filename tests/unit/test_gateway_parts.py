@@ -246,3 +246,29 @@ def test_backend_type_rules(backend: dict[str, object], message: str) -> None:
     } | backend
     with pytest.raises(ValidationError, match=message):
         BackendSettings.model_validate(values)
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"roles__writer__temperature": 0.7}, "temperature must be 0"),
+        ({"roles__writer__seed": None}, "set a fixed seed"),
+        ({"roles__writer__input_price_per_mtok_usd": "3"}, "or neither"),
+    ],
+)
+def test_reproducibility_and_price_rules(changes: dict[str, object], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        ModelsSettings.model_validate(_models_with(**changes))
+
+
+def test_bedrock_chat_roles_need_temperature_zero() -> None:
+    data = base_models_config()
+    backends, roles = data["backends"], data["roles"]
+    assert isinstance(backends, dict)
+    assert isinstance(roles, dict)
+    backends["aws"] = _hosted("bedrock")
+    roles["reasoner"].update(backend="aws", seed=None, temperature=None)
+    with pytest.raises(ValidationError, match="reasoner: temperature must be 0"):
+        ModelsSettings.model_validate(data)
+    roles["reasoner"]["temperature"] = 0
+    assert ModelsSettings.model_validate(data).roles["reasoner"].backend == "aws"

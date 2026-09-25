@@ -21,7 +21,16 @@
 * **Provider schema subsets.** Each provider receives a JSON Schema with its unsupported
   keywords removed. Our Pydantic model is always the final validator, so a constraint a
   provider ignores is still enforced.
-* **Truncation and refusal are failures,** never partial answers.
+* **Only a complete answer is accepted.** Each adapter allowlists its provider's
+  normal-completion reasons (`stop`, `end_turn`/`stop_sequence`, `STOP`). Truncation,
+  context overflow, refusals, content filters and guardrails are failures, so partial text
+  can never enter the append-only cache.
+* **Every attempt is logged.** An exception an adapter failed to classify is logged, then
+  raised as a permanent failure.
+* **Embedding batches follow the provider's request limit** (Bedrock Titan takes one text
+  per request), so each request is rate-limited and retried on its own.
+* **Config enforces reproducible sampling:** temperature 0 on every chat role that accepts
+  a temperature, and a fixed seed on OpenAI-compatible and Gemini backends.
 * **Reproducibility (principle 6):**
   * temperature 0 and a fixed seed wherever the provider accepts them;
   * a persistent cache keyed by backend, model, parameters, prompt ID, version and content

@@ -45,6 +45,9 @@ class EmbeddingResponse(_Frozen):
 
 class ProviderAdapter(Protocol):
     provider: str
+    # Largest number of texts one embedding request may carry (None = no stated limit). The
+    # gateway splits batches accordingly so each request is rate-limited and retried alone.
+    max_texts_per_request: int | None
 
     def chat(
         self,

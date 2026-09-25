@@ -15,13 +15,8 @@ from typing import TYPE_CHECKING
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import (
-    ClientError,
-    ReadTimeoutError,
-)
-from botocore.exceptions import (
-    ConnectionError as BotoConnectionError,
-)
+from botocore.exceptions import BotoCoreError, ClientError, ReadTimeoutError
+from botocore.exceptions import ConnectionError as BotoConnectionError
 
 from patsquire_plr.gateway.errors import PermanentProviderError, RetryableProviderError
 from patsquire_plr.gateway.providers.base import (
@@ -56,6 +51,9 @@ TITAN_EMBED_V2_PREFIX = "amazon.titan-embed-text-v2"
 
 class BedrockAdapter:
     provider = "bedrock"
+    # Titan embeddings take one text per InvokeModel request; the gateway rate-limits and
+    # retries each request separately.
+    max_texts_per_request: int | None = 1
 
     def __init__(
         self, *, region: str, timeout_s: float, client: BedrockRuntimeClient | None = None
@@ -78,6 +76,7 @@ class BedrockAdapter:
             return cls(f"bedrock: {code}: {exc}")
         if isinstance(exc, ReadTimeoutError | BotoConnectionError):
             return RetryableProviderError(f"bedrock: {type(exc).__name__}: {exc}")
+        # Everything else from botocore (NoCredentialsError, ParamValidationError, ...).
         return PermanentProviderError(f"bedrock: {type(exc).__name__}: {exc}")
 
     def chat(
@@ -126,16 +125,19 @@ class BedrockAdapter:
                     inferenceConfig=inference,
                     outputConfig=output_config,
                 )
-        except (ClientError, ReadTimeoutError, BotoConnectionError) as exc:
+        except (ClientError, BotoCoreError) as exc:
             raise self._translate(exc) from exc
         sent: dict[str, object] = {"inferenceConfig": dict(inference)}
         if output_config is not None:
             sent["outputConfig"] = dict(output_config)
 
-        if response.get("stopReason") == "max_tokens":
+        stop = response.get("stopReason")
+        if stop in ("max_tokens", "model_context_window_exceeded"):
             raise PermanentProviderError(
-                f"bedrock: output truncated at {params.max_output_tokens} tokens"
+                f"bedrock: output truncated ({stop}, max_output_tokens={params.max_output_tokens})"
             )
+        if stop not in ("end_turn", "stop_sequence"):  # guardrail_intervened, content_filtered, ...
+            raise PermanentProviderError(f"bedrock: generation ended with stopReason={stop!r}")
         blocks = response["output"]["message"]["content"]
         text = "".join(block["text"] for block in blocks if "text" in block)
         usage = response.get("usage", {})
@@ -163,7 +165,7 @@ class BedrockAdapter:
                     contentType="application/json",
                     accept="application/json",
                 )
-            except (ClientError, ReadTimeoutError, BotoConnectionError) as exc:
+            except (ClientError, BotoCoreError) as exc:
                 raise self._translate(exc) from exc
             body = json.loads(response["body"].read())
             if "embedding" not in body:

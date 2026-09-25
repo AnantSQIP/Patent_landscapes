@@ -26,6 +26,17 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
   and show that switching backends is configuration-only.
 - `plr db upgrade/current`, ADRs 0005 (data sources) and 0006 (model gateway), and the
   provider API reference.
+- **Review fixes:**
+  * Only complete model output is accepted; filtered, guardrailed and context-overflow
+    output fails instead of being cached.
+  * Unclassified adapter exceptions are logged.
+  * Embedding cache hits are logged per text, and batch rows list every key.
+  * Bedrock embeddings are rate-limited and retried per request.
+  * The structured cache stores the exact validated text.
+  * The cache key includes the server's URL and region.
+  * Temperature 0 and a seed are enforced, and prices must be set in pairs.
+  * Migration 0002: positional keys for repeated CPC codes and citations, and
+    `ingest_batch.source_api_version` (§6).
 
 
 ### Added: Phase 1, reference analysis and template specification

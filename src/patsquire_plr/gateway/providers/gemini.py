@@ -26,6 +26,7 @@ HTTP_SERVER_ERROR = 500
 
 class GeminiAdapter:
     provider = "gemini"
+    max_texts_per_request: int | None = None
 
     def __init__(
         self, *, api_key: SecretStr, timeout_s: float, http_client: httpx.Client | None = None
@@ -78,10 +79,15 @@ class GeminiAdapter:
             raise self._translate(exc) from exc
 
         candidates = response.candidates or []
-        if candidates and candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
+        if not candidates:
+            raise PermanentProviderError("gemini: response contained no candidates")
+        finish = candidates[0].finish_reason
+        if finish == types.FinishReason.MAX_TOKENS:
             raise PermanentProviderError(
                 f"gemini: output truncated at {params.max_output_tokens} tokens"
             )
+        if finish != types.FinishReason.STOP:  # SAFETY, RECITATION, BLOCKLIST, ...
+            raise PermanentProviderError(f"gemini: generation ended with finish_reason={finish}")
         if response.text is None:
             raise PermanentProviderError(
                 f"gemini: no text in response (candidates: {len(candidates)})"

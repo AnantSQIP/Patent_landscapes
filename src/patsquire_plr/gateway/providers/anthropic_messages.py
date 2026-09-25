@@ -35,8 +35,13 @@ _RETRYABLE = (
 )
 
 
+# Only these stop reasons mean the answer is complete; anything else is a failure.
+_COMPLETE = ("end_turn", "stop_sequence")
+
+
 class AnthropicAdapter:
     provider = "anthropic"
+    max_texts_per_request: int | None = None
 
     def __init__(
         self, *, api_key: SecretStr, timeout_s: float, http_client: httpx2.Client | None = None
@@ -83,12 +88,17 @@ class AnthropicAdapter:
         except anthropic.AnthropicError as exc:
             raise PermanentProviderError(f"anthropic: {type(exc).__name__}: {exc}") from exc
 
-        if response.stop_reason == "max_tokens":
+        if response.stop_reason in ("max_tokens", "model_context_window_exceeded"):
             raise PermanentProviderError(
-                f"anthropic: output truncated at {params.max_output_tokens} tokens"
+                f"anthropic: output truncated ({response.stop_reason}, "
+                f"max_output_tokens={params.max_output_tokens})"
             )
         if response.stop_reason == "refusal":
             raise PermanentProviderError("anthropic: the model declined to answer (refusal)")
+        if response.stop_reason not in _COMPLETE:
+            raise PermanentProviderError(
+                f"anthropic: generation ended with stop_reason={response.stop_reason!r}"
+            )
         text = "".join(block.text for block in response.content if block.type == "text")
         return ChatResponse(
             text=text,

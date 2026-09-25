@@ -51,7 +51,7 @@ def test_migrations_produce_exactly_the_orm_schema(db_engine: Engine) -> None:
 
 
 def test_database_is_at_head(db_engine: Engine) -> None:
-    assert current_revision(db_engine) == "0001"
+    assert current_revision(db_engine) == "0002"
 
 
 def test_pgvector_extension_is_installed(db_engine: Engine) -> None:
@@ -68,7 +68,7 @@ def test_downgrade_to_base_and_upgrade_again(empty_db_engine: Engine) -> None:
     tables = set(inspect(empty_db_engine).get_table_names()) - {"alembic_version"}
     assert tables == set()
     upgrade(empty_db_engine)
-    assert current_revision(empty_db_engine) == "0001"
+    assert current_revision(empty_db_engine) == "0002"
 
 
 def test_migrations_refuse_to_run_without_a_supplied_connection() -> None:
@@ -98,6 +98,7 @@ def _raw_record(session: Session) -> uuid.UUID:
         source_id="test_source",
         source_type="local_json",
         adapter_version="test",
+        source_api_version="test-fixture-1",
         query_id=None,
         query_text=None,
         started_at=datetime(2026, 9, 25, tzinfo=UTC),
@@ -279,4 +280,36 @@ def test_cli_db_upgrade_and_current(
 
     assert before.stdout.strip() == "none", before.output
     assert upgraded.exit_code == 0, upgraded.output
-    assert upgraded.stdout.strip() == "database at revision 0001"
+    assert upgraded.stdout.strip() == "database at revision 0002"
+
+
+def test_repeated_codes_and_citations_are_stored_as_delivered(db_engine: Engine) -> None:
+    """Two raw spellings of one CPC code and a repeated citing number are both kept."""
+    with Session(db_engine) as session, session.begin():
+        raw_id = _raw_record(session)
+        base = _rich_document(raw_id)
+        document = base.model_copy(
+            update={
+                "cpc": (
+                    ClassificationCode(scheme="cpc", code="G06N3/08", code_raw="G06N 3/08"),
+                    ClassificationCode(scheme="cpc", code="G06N3/08", code_raw="G06N0003/08"),
+                ),
+                "forward_citations": ForwardCitations(
+                    citing_publication_numbers=("US11000001B1", "US11000001B1"),
+                    as_of=date(2026, 9, 1),
+                ),
+            }
+        )
+        document_id = store_document(session, document, raw_pointer="/doc[2]")
+    with Session(db_engine) as session:
+        assert load_document(session, document_id) == document
+
+
+def test_ingest_batch_requires_the_provider_api_version(db_engine: Engine) -> None:
+    with db_engine.connect() as conn, pytest.raises(IntegrityError, match="source_api_version"):
+        conn.execute(
+            text(
+                "INSERT INTO ingest_batch (id, source_id, source_type, adapter_version, "
+                "started_at, status) VALUES (gen_random_uuid(), 's', 't', 'v', now(), 'running')"
+            )
+        )

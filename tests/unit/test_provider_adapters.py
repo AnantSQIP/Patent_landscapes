@@ -15,7 +15,7 @@ import boto3
 import httpx
 import httpx2
 import pytest
-from botocore.exceptions import ReadTimeoutError
+from botocore.exceptions import NoCredentialsError, ReadTimeoutError
 from botocore.response import StreamingBody
 from botocore.stub import Stubber
 from pydantic import SecretStr
@@ -548,3 +548,98 @@ def test_bedrock_truncation_and_missing_embedding_fail() -> None:
             )
         with pytest.raises(PermanentProviderError, match="no 'embedding' field"):
             adapter.embed(model="amazon.titan-embed-text-v2:0", texts=["a"])
+
+
+# ---------------------------------------------------------------- only complete output is accepted
+
+
+def test_openai_content_filter_is_a_failure() -> None:
+    recorder = Recorder(200, _openai_completion("partial", "content_filter"))
+    with pytest.raises(PermanentProviderError, match="finish_reason='content_filter'"):
+        _openai(recorder).chat(
+            model="m", system="S", messages=MESSAGES, params=PARAMS, json_schema=None
+        )
+
+
+@pytest.mark.parametrize(
+    ("stop", "message"),
+    [
+        ("model_context_window_exceeded", "truncated"),
+        ("pause_turn", "stop_reason='pause_turn'"),
+        ("tool_use", "stop_reason='tool_use'"),
+    ],
+)
+def test_anthropic_incomplete_stops_are_failures(stop: str, message: str) -> None:
+    recorder = Recorder(200, _anthropic_message("partial", stop))
+    with pytest.raises(PermanentProviderError, match=message):
+        _anthropic(recorder).chat(
+            model="m", system="S", messages=MESSAGES, params=NO_SAMPLING, json_schema=None
+        )
+
+
+@pytest.mark.parametrize("finish", ["SAFETY", "RECITATION", "BLOCKLIST"])
+def test_gemini_filtered_output_is_a_failure(finish: str) -> None:
+    recorder = Recorder(200, _gemini_response("partial", finish))
+    with pytest.raises(PermanentProviderError, match="finish_reason"):
+        _gemini(recorder).chat(
+            model="m", system="S", messages=MESSAGES, params=PARAMS, json_schema=None
+        )
+
+
+def test_gemini_without_candidates_is_a_failure() -> None:
+    recorder = Recorder(200, {"candidates": [], "usageMetadata": {"promptTokenCount": 1}})
+    with pytest.raises(PermanentProviderError, match="no candidates"):
+        _gemini(recorder).chat(
+            model="m", system="S", messages=MESSAGES, params=PARAMS, json_schema=None
+        )
+
+
+@pytest.mark.parametrize(
+    ("stop", "message"),
+    [
+        ("guardrail_intervened", "stopReason='guardrail_intervened'"),
+        ("content_filtered", "stopReason='content_filtered'"),
+        ("model_context_window_exceeded", "truncated"),
+    ],
+)
+def test_bedrock_incomplete_stops_are_failures(stop: str, message: str) -> None:
+    adapter, stubber = _bedrock()
+    stubber.add_response(
+        "converse",
+        {
+            "output": {"message": {"role": "assistant", "content": [{"text": "partial"}]}},
+            "stopReason": stop,
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            "metrics": {"latencyMs": 1},
+        },
+    )
+    with stubber, pytest.raises(PermanentProviderError, match=message):
+        adapter.chat(
+            model="m", system="S", messages=MESSAGES, params=BEDROCK_PARAMS, json_schema=None
+        )
+
+
+class _NoCredentialsBedrock:
+    """TEST-ONLY stand-in for a bedrock-runtime client without AWS credentials."""
+
+    def converse(self, **_: object) -> dict[str, object]:
+        raise NoCredentialsError
+
+
+def test_bedrock_missing_credentials_is_a_permanent_failure() -> None:
+    adapter = BedrockAdapter(
+        region="us-east-1",
+        timeout_s=1,
+        client=cast("BedrockRuntimeClient", _NoCredentialsBedrock()),
+    )
+    with pytest.raises(PermanentProviderError, match="NoCredentialsError"):
+        adapter.chat(
+            model="m", system="S", messages=MESSAGES, params=BEDROCK_PARAMS, json_schema=None
+        )
+
+
+def test_only_bedrock_limits_texts_per_embedding_request() -> None:
+    assert BedrockAdapter.max_texts_per_request == 1
+    assert OpenAICompatibleAdapter.max_texts_per_request is None
+    assert GeminiAdapter.max_texts_per_request is None
+    assert AnthropicAdapter.max_texts_per_request is None

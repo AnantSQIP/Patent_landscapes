@@ -93,6 +93,9 @@ class IngestBatch(Base):
     source_id: Mapped[str]
     source_type: Mapped[str]
     adapter_version: Mapped[str]
+    source_api_version: Mapped[str] = mapped_column(
+        doc="the provider's API/format version (build prompt §6), e.g. 'OPS 3.2' or 'DOCDB 2.5'"
+    )
     query_id: Mapped[str | None]
     query_text: Mapped[str | None]
     started_at: Mapped[datetime]
@@ -225,7 +228,8 @@ class DocumentPriority(Base):
 
 
 class DocumentClassification(Base):
-    """APPEND-ONLY."""
+    """APPEND-ONLY. Keyed by position, so repeated or differently spelled codes that
+    normalise to the same code are all kept exactly as the source listed them."""
 
     __tablename__ = "document_classification"
     __table_args__ = (CheckConstraint("scheme IN ('cpc', 'ipc')", name="scheme"),)
@@ -234,9 +238,11 @@ class DocumentClassification(Base):
         ForeignKey("patent_document.id"), primary_key=True
     )
     scheme: Mapped[str] = mapped_column(primary_key=True)
-    code: Mapped[str] = mapped_column(primary_key=True)
+    ordinal: Mapped[int] = mapped_column(
+        Integer, primary_key=True, doc="position in the source's list"
+    )
+    code: Mapped[str]
     code_raw: Mapped[str]
-    ordinal: Mapped[int] = mapped_column(Integer, doc="position in the source's list")
 
 
 class DocumentCitation(Base):
@@ -274,8 +280,10 @@ class DocumentForwardCitation(Base):
     document_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("patent_document.id"), primary_key=True
     )
-    citing_publication_number: Mapped[str] = mapped_column(primary_key=True)
-    ordinal: Mapped[int] = mapped_column(Integer, doc="position in the source's list")
+    ordinal: Mapped[int] = mapped_column(
+        Integer, primary_key=True, doc="position in the source's list"
+    )
+    citing_publication_number: Mapped[str]
 
 
 # ------------------------------------------------------------------ fact store (Layer 3)

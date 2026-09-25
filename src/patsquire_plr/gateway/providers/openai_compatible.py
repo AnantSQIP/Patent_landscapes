@@ -34,6 +34,7 @@ _RETRYABLE = (
 
 class OpenAICompatibleAdapter:
     provider = "openai_compatible"
+    max_texts_per_request: int | None = None
 
     def __init__(
         self,
@@ -100,6 +101,10 @@ class OpenAICompatibleAdapter:
         if choice.finish_reason == "length":
             raise PermanentProviderError(
                 f"openai_compatible: output truncated at {params.max_output_tokens} tokens"
+            )
+        if choice.finish_reason != "stop":  # e.g. content_filter: partial output, never accepted
+            raise PermanentProviderError(
+                f"openai_compatible: generation ended with finish_reason={choice.finish_reason!r}"
             )
         if choice.message.content is None:
             refusal = getattr(choice.message, "refusal", None)

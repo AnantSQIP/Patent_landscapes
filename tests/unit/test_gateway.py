@@ -69,7 +69,8 @@ class ScriptedAdapter:
 
     provider = "scripted"
 
-    def __init__(self, script: list[Step]) -> None:
+    def __init__(self, script: list[Step], max_texts_per_request: int | None = None) -> None:
+        self.max_texts_per_request = max_texts_per_request
         self.script = list(script)
         self.chat_calls: list[dict[str, object]] = []
         self.embed_calls: list[list[str]] = []
@@ -405,3 +406,78 @@ def test_rate_limiter_allows_a_burst_then_paces_requests() -> None:
     assert sum(sleeps) == pytest.approx(1.0)
     with pytest.raises(ValueError, match=">= 1"):
         RateLimiter(0, clock=lambda: 0.0, sleep=lambda _: None)
+
+
+# ---------------------------------------------------------------- review fixes
+
+
+def test_unclassified_adapter_exceptions_are_logged_and_raised_as_permanent() -> None:
+    gateway, _, store, sleeps = _gateway([ValueError("adapter bug")])
+    with pytest.raises(PermanentProviderError, match="unclassified ValueError: adapter bug"):
+        gateway.text("writer", PROMPT, VARS)
+    assert store.calls[0].error == "unclassified ValueError: adapter bug"
+    assert sleeps == []
+
+
+def test_embedding_cache_hits_are_logged_per_text_and_batches_record_every_key() -> None:
+    gateway, _, store, _ = _gateway([((1.0, 0.0), (0.0, 1.0))])
+
+    gateway.embed(["alpha", "beta"])
+    gateway.embed(["alpha", "beta"])
+
+    miss, hit_a, hit_b = store.calls
+    assert not miss.cache_hit
+    assert isinstance(miss.output, dict)
+    assert miss.output["cache_keys"] == [hit_a.cache_key, hit_b.cache_key]
+    assert (hit_a.cache_hit, hit_b.cache_hit) == (True, True)
+
+
+def test_embedding_batches_are_split_to_the_adapters_request_limit() -> None:
+    adapter = ScriptedAdapter(
+        [((1.0,),), RetryableProviderError("429"), ((2.0,),), ((3.0,),)], max_texts_per_request=1
+    )
+    store = MemoryStore()
+    gateway = ModelGateway(
+        _models(), secrets=SecretResolver(env_file=None, environ={}), store=store,
+        adapter_factory=lambda *_: adapter, clock=lambda: 0.0, sleep=lambda _: None,
+    )  # fmt: skip
+
+    result = gateway.embed(["a", "b", "c"])
+
+    assert result.vectors == ((1.0,), (2.0,), (3.0,))
+    # one request per text; the retry after the 429 re-sent only "b"
+    assert adapter.embed_calls == [["a"], ["b"], ["b"], ["c"]]
+
+
+class Aliased(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=False)
+
+    is_relevant: bool = Field(alias="isRelevant")
+
+
+def test_cached_structured_output_is_the_validated_text_so_aliases_survive() -> None:
+    gateway, adapter, _, _ = _gateway(['{"isRelevant": true}'])
+
+    first = gateway.structured("reasoner", PROMPT, VARS, Aliased)
+    second = gateway.structured("reasoner", PROMPT, VARS, Aliased)
+
+    assert second.cached
+    assert second.value == first.value
+    assert len(adapter.chat_calls) == 1
+
+
+def test_pointing_a_backend_at_another_server_does_not_reuse_answers() -> None:
+    gateway_a, _, store, _ = _gateway(["from server A"])
+    gateway_a.text("writer", PROMPT, VARS)
+
+    moved = _models()
+    moved.backends["local"] = moved.backends["local"].model_copy(
+        update={"base_url": "http://other-server:8000/v1"}
+    )
+    adapter_b = ScriptedAdapter(["from server B"])
+    gateway_b = ModelGateway(
+        moved, secrets=SecretResolver(env_file=None, environ={}), store=store,
+        adapter_factory=lambda *_: adapter_b, clock=lambda: 0.0, sleep=lambda _: None,
+    )  # fmt: skip
+
+    assert gateway_b.text("writer", PROMPT, VARS).text == "from server B"

@@ -218,7 +218,11 @@ def test_anthropic_request_uses_output_config_and_no_sampling_params() -> None:
     recorder = Recorder(200, _anthropic_message('{"ok": true, "why": "x"}'))
 
     response = _anthropic(recorder).chat(
-        model="anthropic-test-model", system="S", messages=MESSAGES, params=NO_SAMPLING, json_schema=SCHEMA
+        model="anthropic-test-model",
+        system="S",
+        messages=MESSAGES,
+        params=NO_SAMPLING,
+        json_schema=SCHEMA,
     )
 
     url, body = recorder.requests[0]

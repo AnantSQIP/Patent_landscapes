@@ -1,0 +1,96 @@
+# Local / on-prem infrastructure. Start with:  docker compose --env-file .env up -d
+# Then verify with:                           uv run plr health --env-file .env
+name: patsquire-plr
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+    ports: ["127.0.0.1:${PLR_POSTGRES_HOST_PORT:?set PLR_POSTGRES_HOST_PORT in .env}:5432"]
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["127.0.0.1:${PLR_REDIS_HOST_PORT:?set PLR_REDIS_HOST_PORT in .env}:6379"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # MinIO upstream is discontinued (repos archived, official images and binaries removed).
+  # This is its final release, RELEASE.2025-10-15T17-29-55Z, built from the official source by
+  # github.com/alpine-docker/minio, pinned by digest. Dev/test only; see ADR 0003.
+  minio:
+    image: alpine/minio@sha256:cf23643a6cf9ce159c57643ceb88279e431262282428c9e0bf3a7ef1a97e84b4
+    command: ["server", "/data", "--console-address", ":9001"]
+    # The image runs as uid 100, but volume mount points are created root-owned, so MinIO
+    # could not write to /data. Running as root is acceptable for this dev/test-only service.
+    user: "0:0"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${PLR_MINIO_HOST_PORT:?set PLR_MINIO_HOST_PORT in .env}:9000"
+      - "127.0.0.1:${PLR_MINIO_CONSOLE_HOST_PORT:?set PLR_MINIO_CONSOLE_HOST_PORT in .env}:9001"
+    volumes: [minio-data:/data]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot job: create the artifact bucket with versioning (idempotent), then exit.
+  # Uses the official AWS CLI because MinIO's own client (mc) is no longer distributed.
+  minio-init:
+    image: amazon/aws-cli:2.37.3
+    depends_on:
+      minio: {condition: service_healthy}
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_DEFAULT_REGION: us-east-1
+      PLR_BUCKET: ${PLR_BUCKET:?set PLR_BUCKET in .env}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        aws --endpoint-url http://minio:9000 s3api head-bucket --bucket "$$PLR_BUCKET" 2>/dev/null \
+          || aws --endpoint-url http://minio:9000 s3api create-bucket --bucket "$$PLR_BUCKET"
+        aws --endpoint-url http://minio:9000 s3api put-bucket-versioning --bucket "$$PLR_BUCKET" \
+          --versioning-configuration Status=Enabled
+        echo "bucket $$PLR_BUCKET ready"
+    restart: "no"
+
+  # The app image; runs `plr health` against the services above.
+  app:
+    build: {context: ., dockerfile: docker/app.Dockerfile}
+    profiles: [app]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      minio-init: {condition: service_completed_successfully}
+    env_file: [.env]
+    # Inside the compose network, services are reached by name on their container ports,
+    # not on the host ports in config/settings.yaml.
+    environment:
+      PLR__DATABASE__HOST: postgres
+      PLR__DATABASE__PORT: "5432"
+      PLR__REDIS__HOST: redis
+      PLR__REDIS__PORT: "6379"
+      PLR__OBJECT_STORAGE__ENDPOINT_URL: http://minio:9000
+    command: ["plr", "health"]
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

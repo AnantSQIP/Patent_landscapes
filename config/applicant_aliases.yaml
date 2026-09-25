@@ -1,0 +1,6 @@
+# Applicant alias groups: real ownership or naming relations that formatting rules cannot
+# know (e.g. a parent company and its subsidiary). Every group needs a reason saying why and
+# who decided. Nothing here is ever added automatically: `plr dataset report` lists
+# look-alike names for review, and a person decides whether to add a group.
+version: 1
+groups: []

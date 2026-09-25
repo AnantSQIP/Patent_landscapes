@@ -86,8 +86,9 @@ Short names used below:
   - Unit: families, with **international patent families (IPFs)** as the headline unit.
   - Time basis: earliest publication year within the family.
   - The last year is flagged as incomplete.
-  - Families that are purely domestic are excluded from IPF counts. Regional (EP) and PCT
-    filings count as international.
+  - A family counts as an IPF if it has filings at more than one office, or its applicants or
+    inventors come from different countries. Regional (EP) and PCT filings count as
+    international by default.
 - **Search.**
   - A broad base query plus a hierarchy of query IDs: groupings → queries → sub-queries, with an
     "other" suffix for residuals.
@@ -304,11 +305,12 @@ Each decision below is implemented in `template/plr_template.yaml`.
    because the references disagree.
 3. **Whole counting is the default, and fractional counting is optional.** When fractional
    counting is used for country attribution, it is labelled on the chart.
-4. **Identical per-segment block** (all five reports): trend and growth → top applicants
-   (companies and academia separately) → geography → key patents.
+4. **Identical per-segment block** (fully in four reports, partly in `quantum`): trend and
+   growth → top applicants (companies and academia separately) → geography → key patents.
 5. **Cross-matrices:** applicant×segment and country×segment. Segment×segment Sankeys are
    used where there are several taxonomy axes.
-6. **Full disclosure in the report itself**, going beyond every reference:
+6. **Full disclosure in the report itself**, going beyond every reference (the `limitations`
+   metric and table in the methodology section carry the last item):
    * the search strings with hit counts per query;
    * the exclusions with reason codes;
    * the measured precision/recall of the AI filter and classifier;
@@ -332,8 +334,9 @@ Each decision below is implemented in `template/plr_template.yaml`.
 9. **Deferred to later phases:**
    * **Business context** (funding, start-ups): it needs non-patent sources, so it is only
      allowed under Layer 7 (cited sources).
-   * **Landscape (topic) maps:** built from our own embeddings (Phase 6) with a documented
-     projection, never a proprietary black box.
+   * **Landscape (topic) maps:** the template includes one (white-space section), but its
+     coordinates come from our own embeddings (Phase 6) with a documented projection, never a
+     proprietary black box.
 
 ## 5. Decisions that need the owner's input
 

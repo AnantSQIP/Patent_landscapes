@@ -323,3 +323,131 @@ def test_cli_originality_check(tmp_path: Path) -> None:
     assert bad.exit_code == 1
     assert "shares 'share of international families" in bad.stderr
     assert none.exit_code == 2
+
+
+# ---------------------------------------------------------------- consistency rules (review fixes)
+
+
+def _metric(data: Data, metric_id: str) -> dict[str, object]:
+    return next(m for m in data["metrics"] if m["id"] == metric_id)
+
+
+@pytest.mark.parametrize(
+    ("metric_id", "field", "message"),
+    [
+        (
+            "families_per_year",
+            "filing_office",
+            "uses international_family but lists none of ['filing_office']",
+        ),
+        ("forward_citations", "publication_date", "uses forward_citation_window"),
+        ("key_patent_score", "legal_status", "uses key_patent_formula"),
+        ("pct_usage", "applicant_countries", "uses country_attribution"),
+    ],
+)
+def test_metric_must_list_fields_its_definitions_need(
+    tmp_path: Path, metric_id: str, field: str, message: str
+) -> None:
+    def mutate(data: Data) -> None:
+        metric = _metric(data, metric_id)
+        fields = metric["requires_fields"]
+        assert isinstance(fields, list)
+        metric["requires_fields"] = [f for f in fields if f != field]
+
+    with pytest.raises(TemplateError, match=message.replace("[", r"\[").replace("]", r"\]")):
+        _load_mutated(tmp_path, mutate)
+
+
+def test_time_placed_metric_must_use_time_basis(tmp_path: Path) -> None:
+    def mutate(data: Data) -> None:
+        metric = _metric(data, "top_classification_codes")
+        metric["uses_definitions"] = []
+
+    with pytest.raises(TemplateError, match="does not use time_basis"):
+        _load_mutated(tmp_path, mutate)
+
+
+def test_excluding_incomplete_periods_requires_the_definition(tmp_path: Path) -> None:
+    def mutate(data: Data) -> None:
+        metric = _metric(data, "filing_velocity")
+        metric["uses_definitions"] = ["time_basis", "applicant_normalization"]
+
+    with pytest.raises(TemplateError, match="does not use incomplete_period"):
+        _load_mutated(tmp_path, mutate)
+
+
+def test_segment_metrics_must_come_from_classification(tmp_path: Path) -> None:
+    def mutate(data: Data) -> None:
+        _metric(data, "families_per_segment")["source"] = "patent_data"
+
+    with pytest.raises(TemplateError, match="source must be classification"):
+        _load_mutated(tmp_path, mutate)
+
+
+def test_patent_data_section_cannot_use_classification_facts(tmp_path: Path) -> None:
+    def mutate(data: Data) -> None:
+        _section(data, "geographical_distribution")["source_type"] = "patent_data"
+
+    with pytest.raises(
+        TemplateError,
+        match="geographical_distribution is patent_data but uses country_specialisation",
+    ):
+        _load_mutated(tmp_path, mutate)
+
+
+def test_unused_definition_and_reference(tmp_path: Path) -> None:
+    def mutate(data: Data) -> None:
+        data["definitions"].append(
+            {
+                "id": "orphan_def",
+                "term": "Orphan",
+                "definition": "A definition nobody uses at all.",
+                "default": "x",
+            }
+        )
+        data["references"].append(
+            {"id": "orphan_ref", "title": "t", "publisher": "p", "year": 2020, "pages": 1}
+        )
+
+    with pytest.raises(TemplateError) as exc_info:
+        _load_mutated(tmp_path, mutate)
+    assert "definitions never used by a metric: ['orphan_def']" in str(exc_info.value)
+    assert "references never cited: ['orphan_ref']" in str(exc_info.value)
+
+
+def test_limitations_are_carried_in_the_methodology(spec: TemplateSpec) -> None:
+    methodology = next(s for s in spec.sections if s.id == "scope_and_methodology")
+    assert "limitations" in methodology.required_facts
+    assert any("limitations" in t.metrics for t in methodology.tables)
+
+
+def test_key_patent_formula_is_explicit(spec: TemplateSpec) -> None:
+    formula = next(d for d in spec.definitions if d.id == "key_patent_formula")
+    assert "score =" in formula.definition
+    assert formula.needs_owner_decision
+
+
+def test_ipf_definition_states_how_ep_and_wo_count(spec: TemplateSpec) -> None:
+    ipf = next(d for d in spec.definitions if d.id == "international_family")
+    assert "PCT (WO) application does not" in ipf.definition
+    assert "EPO counts as one office" in ipf.definition
+
+
+def test_copied_whole_heading_is_detected_but_cover_title_is_not() -> None:
+    extract = ReferenceExtract(
+        file_name="ref.pdf",
+        sha256="0" * 64,
+        page_count=3,
+        extractor_version="1",
+        heading_source="bookmark",
+        headings=(
+            Heading(level=0, title="Patents for a better tomorrow", page=1, source="bookmark"),
+            Heading(level=1, title="Key locations of inventors", page=3, source="bookmark"),
+            Heading(level=1, title="Top applicants", page=3, source="bookmark"),
+        ),
+        captions=(),
+        pages_without_text=(),
+    )
+    text = "We cite 'Patents for a better tomorrow'. Key locations of inventors. Top applicants."
+
+    assert copied_phrases(text, [extract]) == [("ref.pdf", "key locations of inventors")]

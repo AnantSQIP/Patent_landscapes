@@ -95,6 +95,31 @@ SectionSource = Literal[
 ]
 
 
+# Fields a metric must list when it uses a definition. Each inner set is "any of".
+_DEFINITION_NEEDS: dict[str, tuple[frozenset[str], ...]] = {
+    "time_basis": (frozenset({"priority_date"}),),
+    "incomplete_period": (frozenset({"priority_date"}),),
+    "growth_rate": (frozenset({"priority_date"}),),
+    "international_family": (frozenset({"filing_office"}),),
+    "applicant_normalization": (frozenset({"applicants"}),),
+    "legal_status_basis": (frozenset({"legal_status"}),),
+    "self_citation": (frozenset({"applicants"}), frozenset({"forward_citations"})),
+    "forward_citation_window": (frozenset({"forward_citations"}), frozenset({"publication_date"})),
+    "country_attribution": (frozenset({"applicant_countries", "inventor_countries"}),),
+    "key_patent_formula": (
+        frozenset({"forward_citations"}),
+        frozenset({"filing_office"}),
+        frozenset({"legal_status"}),
+    ),
+}
+
+# Fact sources a section of each source type may draw on (unlisted types are unconstrained).
+_SECTION_ALLOWED_SOURCES: dict[str, frozenset[str]] = {
+    "patent_data": frozenset({"patent_data"}),
+    "classification": frozenset({"patent_data", "classification"}),
+}
+
+
 class TemplateError(PlrError):
     """The template specification is missing, malformed or internally inconsistent."""
 
@@ -145,9 +170,23 @@ class Metric(_Model):
     )
 
     @model_validator(mode="after")
-    def _patent_metrics_need_fields(self) -> Self:
-        if self.source in ("patent_data", "classification") and not self.requires_fields:
-            raise ValueError(f"metric {self.id} is computed from data but lists no fields")
+    def _fields_match_definitions(self) -> Self:
+        problems: list[str] = []
+        fields = set(self.requires_fields)
+        if self.source in ("patent_data", "classification") and not fields:
+            problems.append("is computed from data but lists no fields")
+        for definition in self.uses_definitions:
+            for any_of in _DEFINITION_NEEDS.get(definition, ()):
+                if not fields & any_of:
+                    problems.append(f"uses {definition} but lists none of {sorted(any_of)}")
+        if "priority_date" in fields and "time_basis" not in self.uses_definitions:
+            problems.append("places families in time (priority_date) but does not use time_basis")
+        if self.excludes_incomplete_periods and "incomplete_period" not in self.uses_definitions:
+            problems.append("excludes incomplete periods but does not use incomplete_period")
+        if "segment_labels" in self.uses_definitions and self.source != "classification":
+            problems.append("uses segment_labels, so its source must be classification")
+        if problems:
+            raise ValueError(f"metric {self.id} " + "; ".join(problems))
         return self
 
 
@@ -212,78 +251,116 @@ class TemplateSpec(_Model):
         for section in self.sections:
             yield from section.walk()
 
+    def _section_facts(self, section: Section) -> set[str]:
+        facts = set(section.required_facts)
+        facts.update(m for c in section.charts for m in c.metrics)
+        facts.update(m for t in section.tables for m in t.metrics)
+        return facts
+
     @model_validator(mode="after")
     def _cross_references(self) -> Self:
-        problems: list[str] = []
+        problems = [
+            *self._duplicate_ids(),
+            *self._unknown_references(),
+            *self._required_section_problems(),
+            *self._source_consistency_problems(),
+            *self._unused_items(),
+        ]
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
 
-        def unique(kind: str, ids: list[str]) -> set[str]:
-            duplicates = sorted(i for i, n in Counter(ids).items() if n > 1)
-            if duplicates:
-                problems.append(f"duplicate {kind} ids: {duplicates}")
-            return set(ids)
-
-        reference_ids = unique("reference", [r.id for r in self.references])
-        definition_ids = unique("definition", [d.id for d in self.definitions])
-        metric_ids = unique("metric", [m.id for m in self.metrics])
-        chart_ids = unique("chart type", [c.id for c in self.chart_types])
+    def _duplicate_ids(self) -> list[str]:
         sections = list(self.all_sections())
-        unique("section", [s.id for s in sections] + [a.id for a in self.appendices])
-        unique(
-            "chart/table",
-            [c.id for s in sections for c in s.charts] + [t.id for s in sections for t in s.tables],
-        )
+        groups = {
+            "reference": [r.id for r in self.references],
+            "definition": [d.id for d in self.definitions],
+            "metric": [m.id for m in self.metrics],
+            "chart type": [c.id for c in self.chart_types],
+            "section": [s.id for s in sections] + [a.id for a in self.appendices],
+            "chart/table": [c.id for s in sections for c in s.charts]
+            + [t.id for s in sections for t in s.tables],
+        }
+        problems = []
+        for kind, ids in groups.items():
+            if duplicates := sorted(i for i, n in Counter(ids).items() if n > 1):
+                problems.append(f"duplicate {kind} ids: {duplicates}")
+        return problems
 
-        def check(owner: str, kind: str, used: tuple[str, ...], known: set[str]) -> None:
-            for item in used:
-                if item not in known:
-                    problems.append(f"{owner}: unknown {kind} '{item}'")
-
+    def _unknown_references(self) -> list[str]:
+        known = {
+            "reference": {r.id for r in self.references},
+            "definition": {d.id for d in self.definitions},
+            "metric": {m.id for m in self.metrics},
+            "chart type": {c.id for c in self.chart_types},
+        }
+        uses: list[tuple[str, str, tuple[str, ...]]] = []
         for metric in self.metrics:
-            check(f"metric {metric.id}", "definition", metric.uses_definitions, definition_ids)
-            check(f"metric {metric.id}", "reference", metric.reference_practice, reference_ids)
+            uses.append((f"metric {metric.id}", "definition", metric.uses_definitions))
+            uses.append((f"metric {metric.id}", "reference", metric.reference_practice))
         for chart_type in self.chart_types:
-            check(
-                f"chart type {chart_type.id}",
-                "reference",
-                chart_type.reference_practice,
-                reference_ids,
-            )
-
-        used_metrics: set[str] = set()
-        used_charts: set[str] = set()
-        for section in sections:
+            uses.append((f"chart type {chart_type.id}", "reference", chart_type.reference_practice))
+        for section in self.all_sections():
             owner = f"section {section.id}"
-            check(owner, "metric", section.required_facts, metric_ids)
-            check(owner, "reference", section.reference_practice, reference_ids)
-            used_metrics.update(section.required_facts)
+            uses.append((owner, "metric", section.required_facts))
+            uses.append((owner, "reference", section.reference_practice))
             for chart in section.charts:
-                check(f"{owner} chart {chart.id}", "chart type", (chart.chart_type,), chart_ids)
-                check(f"{owner} chart {chart.id}", "metric", chart.metrics, metric_ids)
-                used_charts.add(chart.chart_type)
-                used_metrics.update(chart.metrics)
+                uses.append((f"{owner} chart {chart.id}", "chart type", (chart.chart_type,)))
+                uses.append((f"{owner} chart {chart.id}", "metric", chart.metrics))
             for table in section.tables:
-                check(f"{owner} table {table.id}", "metric", table.metrics, metric_ids)
-                used_metrics.update(table.metrics)
+                uses.append((f"{owner} table {table.id}", "metric", table.metrics))
         for appendix in self.appendices:
-            check(f"appendix {appendix.id}", "metric", appendix.required_facts, metric_ids)
-            used_metrics.update(appendix.required_facts)
+            uses.append((f"appendix {appendix.id}", "metric", appendix.required_facts))
+        return [
+            f"{owner}: unknown {kind} '{item}'"
+            for owner, kind, items in uses
+            for item in items
+            if item not in known[kind]
+        ]
 
+    def _required_section_problems(self) -> list[str]:
         top_level = [s.id for s in self.sections]
-        missing = [s for s in REQUIRED_SECTION_IDS if s not in top_level]
-        if missing:
+        problems = []
+        if missing := [s for s in REQUIRED_SECTION_IDS if s not in top_level]:
             problems.append(f"missing required sections (build prompt §9): {missing}")
         present_required = [s for s in top_level if s in REQUIRED_SECTION_IDS]
         if present_required != [s for s in REQUIRED_SECTION_IDS if s in top_level]:
             problems.append("required sections are not in build prompt §9 order")
+        return problems
 
-        if unused := sorted(metric_ids - used_metrics):
-            problems.append(f"metrics defined but never used: {unused}")
-        if unused := sorted(chart_ids - used_charts):
-            problems.append(f"chart types defined but never used: {unused}")
+    def _source_consistency_problems(self) -> list[str]:
+        metric_source = {m.id: m.source for m in self.metrics}
+        problems = []
+        for section in self.all_sections():
+            allowed = _SECTION_ALLOWED_SOURCES.get(section.source_type)
+            if allowed is None:
+                continue
+            for fact in sorted(self._section_facts(section)):
+                source = metric_source.get(fact)
+                if source is not None and source not in allowed:
+                    problems.append(
+                        f"section {section.id} is {section.source_type} but uses {fact} "
+                        f"({source}); make the section 'mixed' or move the fact"
+                    )
+        return problems
 
-        if problems:
-            raise ValueError("; ".join(problems))
-        return self
+    def _unused_items(self) -> list[str]:
+        sections = list(self.all_sections())
+        used_metrics = {f for s in sections for f in self._section_facts(s)}
+        used_metrics.update(f for a in self.appendices for f in a.required_facts)
+        used_charts = {c.chart_type for s in sections for c in s.charts}
+        used_definitions = {d for m in self.metrics for d in m.uses_definitions}
+        used_references = {r for m in self.metrics for r in m.reference_practice}
+        used_references.update(r for c in self.chart_types for r in c.reference_practice)
+        used_references.update(r for s in sections for r in s.reference_practice)
+        unused = {
+            "metrics defined but never used": {m.id for m in self.metrics} - used_metrics,
+            "chart types defined but never used": {c.id for c in self.chart_types} - used_charts,
+            "definitions never used by a metric": {d.id for d in self.definitions}
+            - used_definitions,
+            "references never cited": {r.id for r in self.references} - used_references,
+        }
+        return [f"{label}: {sorted(ids)}" for label, ids in unused.items() if ids]
 
 
 def load_template(path: Path) -> TemplateSpec:

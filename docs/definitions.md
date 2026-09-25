@@ -23,7 +23,7 @@ The family grouping taken from the data source: a simple family (same priorities
 
 ### Time axis (`time_basis`)
 
-Year used to place a family in time. The default is the earliest priority year, the closest available proxy for the date of invention. The basis is stated on every trend chart.
+Year used to place a family in time. The default is the earliest priority year, the closest available proxy for the date of invention. Choosing the filing or publication basis requires that date field instead of the priority date. The basis is stated on every trend chart.
 
 * Default: `earliest_priority_year`
 * Options: `earliest_priority_year`, `earliest_filing_year`, `earliest_publication_year`
@@ -38,7 +38,7 @@ Applications are generally published about 18 months after filing, so the most r
 
 ### International patent family (IPF) (`international_family`)
 
-A family with filings at two or more distinct patent offices. Under the alternative rule used by the EPO and OECD, any family containing an EP or PCT (WO) filing also counts as international. The rule used is printed in the methodology section.
+Under two_or_more_offices, a family is international when it has filings at two or more distinct granting offices. The EPO counts as one office. A PCT (WO) application does not count as an office, because it does not itself grant protection. Under two_or_more_offices_or_ep_or_pct (the EPO and OECD practice), a family is also international if it contains any EP or any PCT application. The rule used is printed in the methodology section.
 
 * Default: `two_or_more_offices`
 * Options: `two_or_more_offices`, `two_or_more_offices_or_ep_or_pct`
@@ -71,7 +71,7 @@ Legal status exactly as supplied by the data source, as of the retrieval date. M
 
 ### Growth rates (`growth_rate`)
 
-Compound annual growth rate: CAGR = (end / start)^(1 / years) - 1, with the start and end years printed next to every value. Period change compares two stated periods. Both exclude the incomplete recent period by default.
+Compound annual growth rate: CAGR = (value in end year / value in start year)^(1 / n) - 1, where n = end year - start year. The start and end years are printed next to every value. If the start value is 0, the CAGR is reported as "not defined", never as infinity or 0. Period change compares two stated periods. Both exclude the incomplete recent period by default.
 
 * Default: `cagr_excluding_incomplete`
 
@@ -87,6 +87,13 @@ Forward citations are counted within a fixed number of years after the cited fam
 
 * Default: `5_years`
 * Options: `3_years`, `5_years`
+
+### Key patent score (`key_patent_formula`)
+
+score = 0.5 x c + 0.3 x o + 0.2 x g. Here c is the family's percentile rank (0 to 1) of windowed non-self forward citations, o is its percentile rank of distinct granting offices, and g is 1 if any member is granted, else 0. Percentile ranks are computed within the report's dataset. Ties are broken by earliest priority date, then family ID. The weights are printed next to every ranking.
+
+* Default: `citations_0.5_offices_0.3_granted_0.2`
+* **Needs owner decision** before the first production report.
 
 ### Technology segments (`segment_labels`)
 
@@ -108,6 +115,7 @@ A technology area with relatively low patenting activity within this report's se
 | `query_hit_counts` | Hits per search query | records | document | system_metadata | Number of records returned by each saved query (the broad query and each segment and sub-query), identified by its query ID. |
 | `seed_recall` | Seed-set recall | percent | family | system_metadata | Share of user-confirmed seed patents that appear in the retrieved dataset. Every missing seed patent is listed by number. |
 | `dataset_reconciliation` | Dataset reconciliation funnel | records / families | family | system_metadata | Records retrieved, duplicates removed, families formed, and families excluded (by reason code) at each filtering step, down to the final in-scope families. Every step balances: input = kept + excluded. |
+| `limitations` | Limitations and warnings | items | n/a | system_metadata | Every non-blocking verification warning, known data gap (e.g. fields missing from the source, unmeasured recall) and methodological limitation recorded during the run, each with the step that raised it. |
 | `field_completeness` | Data completeness per field | percent | family | patent_data | For each canonical record field, the share of in-scope families where the field is present. Missing values are counted, not filled. |
 | `families_total` | In-scope patent families | families | family | patent_data | Number of distinct families in the final, filtered dataset, under the configured family definition. |
 | `relevance_quality` | Relevance filter accuracy | ratio | family | classification | Precision, recall and F1 of the relevance filter against the human-labelled gold set, with 95% confidence intervals and the gold-set size. |
@@ -118,25 +126,25 @@ A technology area with relatively low patenting activity within this report's se
 | `filing_velocity` | Filing velocity | families per year | family | patent_data | Average families per year over the last five complete years, for the whole dataset, each top applicant and each segment. |
 | `maturity_map_points` | Maturity map series | applicants / families | family | patent_data | One point per year: number of distinct normalised applicants (x), number of families (y), and number of families with at least one grant (point size). Years are grouped into fixed five-year phases. |
 | `top_applicants` | Top applicants | families | family | patent_data | Normalised applicants ranked by number of families (whole counting). Companies and universities or public research bodies are ranked separately and together. Values are shown for the full period and the most recent complete window. |
-| `applicant_sector_share` | Applicant sector share | percent | family | patent_data | Share of families by applicant sector (company, university or public research, individual, other), assigned by deterministic rules. Unknown sector is reported as such. |
+| `applicant_sector_share` | Applicant sector share | percent | family | patent_data | Share of families by applicant sector (company, university or public research, individual, other) per year, assigned by deterministic rules. Unknown sector is reported as such. |
 | `newcomers` | Newcomers | applicants | applicant | patent_data | Applicants whose first family in the dataset falls within the most recent complete window. They are listed with their family counts. |
-| `applicant_concentration` | Applicant concentration | percent / index | family | patent_data | Share of families held by the top 10 applicants, and the Herfindahl-Hirschman index, i.e. the sum of squared applicant shares, scaled 0 to 10,000. |
+| `applicant_concentration` | Applicant concentration | percent / index | family | patent_data | Top-10 share: distinct families with at least one of the ten largest applicants, divided by all in-scope families. Herfindahl-Hirschman index: each family is split equally between its normalised applicants (fractional counting, so shares sum to 1); HHI is the sum of squared applicant shares, times 10,000. |
 | `top_inventors` | Top inventors | families | family | patent_data | Inventors ranked by number of families, with their most frequent applicant where the data allows. Inventor names are not merged across different spellings unless the data source supplies an inventor identifier. |
-| `families_by_filing_office` | Families by filing office | families | family | patent_data | Number of families with at least one filing at each patent office, i.e. where protection is sought. A family counts once per office. |
+| `families_by_filing_office` | Families by filing office | families | family | patent_data | Number of families with at least one filing at each granting office, i.e. where protection is sought. A family counts once per office. PCT (WO) applications are not a granting office and are reported under PCT usage instead. |
 | `families_by_inventor_country` | Families by inventor country | families | family | patent_data | Families by country of inventor address (whole or fractional counting, as configured). Families without inventor country data are counted as unknown. |
 | `families_by_applicant_country` | Families by applicant country | families | family | patent_data | Families by applicant country of residence (whole or fractional counting, as configured). Families without applicant country data are counted as unknown. |
 | `priority_vs_protection` | Priority country versus protection countries | families | family | patent_data | For each country, the number of families first filed there (priority country) compared with the number of families seeking protection there. |
-| `country_specialisation` | Revealed technological advantage (RTA) | index | family | classification | RTA = (country's share of families in a segment) / (country's share of families across all segments of this landscape). RTA above 1 indicates relative specialisation. It is computed per applicant country, with the counting method stated. |
+| `country_specialisation` | Revealed technological advantage (RTA) | index | family | classification | RTA(c, s) = (A[c,s] / sum over countries of A[k,s]) / (sum over segments of A[c,j] / sum over all countries and segments of A[k,j]). A[c,s] counts the family-segment assignments credited to applicant country c in segment s, with unclassified families excluded and country credit following the configured attribution. RTA above 1 indicates relative specialisation. |
 | `families_per_segment` | Families per segment | families | family | classification | Families per technology segment, with the overlap (families in 2 or more segments) and the unclassified bucket shown alongside. |
 | `segment_trends` | Segment trends | families | family | classification | Families per segment per year, with CAGR per segment over the same stated period, and a ranking of the fastest-growing segments. |
 | `segment_cooccurrence` | Segment co-occurrence | families | family | classification | Number of families shared between each pair of segments, within one taxonomy axis or across two axes. |
 | `family_size_distribution` | Family size distribution | families | family | patent_data | Distribution of families by number of distinct filing offices, and by number of member documents. |
-| `internationalisation_rate` | Internationalisation rate | percent | family | patent_data | Share of families that are international patent families, overall, per year, per applicant country and per segment. |
+| `internationalisation_rate` | Internationalisation rate | percent | family | patent_data | Share of families that are international patent families, overall, per year and per applicant country. The per-segment split is in the segment profiles. |
 | `pct_usage` | PCT usage | percent | family | patent_data | Share of families containing a PCT (WO) application, overall and per applicant country. |
-| `legal_status_distribution` | Legal status distribution | families | family | patent_data | Families by legal status category as supplied by the data source (e.g. pending, granted, lapsed, expired, withdrawn, unknown), as of the retrieval date. |
+| `legal_status_distribution` | Legal status distribution | families | family | patent_data | Families by legal status category as supplied by the data source (e.g. pending, granted, lapsed, expired, withdrawn, unknown), as of the retrieval date, overall and per year. |
 | `granted_share` | Granted share | percent | family | patent_data | Share of families with at least one granted member, per year, per filing office and per top applicant. |
 | `forward_citations` | Forward citations | citations | family | patent_data | Non-self forward citations per family within the configured window, shown in bins (0, 1, 2, 3-4, 5-10, 11-50, over 50) and as a ranking of the most-cited families. |
-| `key_patent_score` | Key patent ranking | score | family | patent_data | Families ranked by a published formula combining windowed non-self forward citations, number of filing offices and granted status. The formula and weights are printed next to the ranking; there is no subjective selection. |
+| `key_patent_score` | Key patent ranking | score | family | patent_data | Families ranked by the key patent score definition (citations, offices, grant status), with the formula and weights printed next to the ranking. There is no subjective selection. |
 | `npl_citation_share` | Non-patent literature citation share | percent | family | patent_data | Share of backward citations that cite non-patent literature (e.g. scientific papers), as a proxy for closeness to science. |
 | `portfolio_strength` | Portfolio strength | citations / years | family | patent_data | For each top applicant: average windowed non-self forward citations per family against the average age of its families, with the number of granted families as the point size. |
 | `applicant_segment_matrix` | Applicant by segment matrix | families | family | classification | Families per top applicant per segment, with each applicant's share of its own portfolio in each segment. |

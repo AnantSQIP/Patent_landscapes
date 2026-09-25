@@ -44,8 +44,9 @@ definitions:
     term: Time axis
     definition: >-
       Year used to place a family in time. The default is the earliest priority year, the
-      closest available proxy for the date of invention. The basis is stated on every trend
-      chart.
+      closest available proxy for the date of invention. Choosing the filing or publication
+      basis requires that date field instead of the priority date. The basis is stated on
+      every trend chart.
     default: earliest_priority_year
     options: [earliest_priority_year, earliest_filing_year, earliest_publication_year]
 
@@ -63,9 +64,12 @@ definitions:
   - id: international_family
     term: International patent family (IPF)
     definition: >-
-      A family with filings at two or more distinct patent offices. Under the alternative
-      rule used by the EPO and OECD, any family containing an EP or PCT (WO) filing also
-      counts as international. The rule used is printed in the methodology section.
+      Under two_or_more_offices, a family is international when it has filings at two or more
+      distinct granting offices. The EPO counts as one office. A PCT (WO) application does not
+      count as an office, because it does not itself grant protection. Under
+      two_or_more_offices_or_ep_or_pct (the EPO and OECD practice), a family is also
+      international if it contains any EP or any PCT application. The rule used is printed in
+      the methodology section.
     default: two_or_more_offices
     options: [two_or_more_offices, two_or_more_offices_or_ep_or_pct]
     needs_owner_decision: true
@@ -108,9 +112,11 @@ definitions:
   - id: growth_rate
     term: Growth rates
     definition: >-
-      Compound annual growth rate: CAGR = (end / start)^(1 / years) - 1, with the start and
-      end years printed next to every value. Period change compares two stated periods. Both
-      exclude the incomplete recent period by default.
+      Compound annual growth rate: CAGR = (value in end year / value in start year)^(1 / n) - 1,
+      where n = end year - start year. The start and end years are printed next to every value.
+      If the start value is 0, the CAGR is reported as "not defined", never as infinity or 0.
+      Period change compares two stated periods. Both exclude the incomplete recent period by
+      default.
     default: cagr_excluding_incomplete
 
   - id: self_citation
@@ -128,6 +134,17 @@ definitions:
       window has not yet closed are flagged.
     default: 5_years
     options: [3_years, 5_years]
+
+  - id: key_patent_formula
+    term: Key patent score
+    definition: >-
+      score = 0.5 x c + 0.3 x o + 0.2 x g. Here c is the family's percentile rank (0 to 1) of
+      windowed non-self forward citations, o is its percentile rank of distinct granting
+      offices, and g is 1 if any member is granted, else 0. Percentile ranks are computed
+      within the report's dataset. Ties are broken by earliest priority date, then family ID.
+      The weights are printed next to every ranking.
+    default: citations_0.5_offices_0.3_granted_0.2
+    needs_owner_decision: true
 
   - id: segment_labels
     term: Technology segments
@@ -194,6 +211,17 @@ metrics:
     requires_fields: [publication_number, family_id]
     reference_practice: [wind, ai_science]
 
+  - id: limitations
+    name: Limitations and warnings
+    definition: >-
+      Every non-blocking verification warning, known data gap (e.g. fields missing from the
+      source, unmeasured recall) and methodological limitation recorded during the run, each
+      with the step that raised it.
+    unit: items
+    counting_unit: null
+    source: system_metadata
+    requires_fields: []
+
   - id: field_completeness
     name: Data completeness per field
     definition: >-
@@ -258,7 +286,7 @@ metrics:
     unit: families
     counting_unit: family
     source: patent_data
-    requires_fields: [family_id, priority_date]
+    requires_fields: [family_id, priority_date, filing_office]
     uses_definitions: [time_basis, incomplete_period, international_family]
     reference_practice: [genai, wind, hydrogen, quantum, ai_science]
 
@@ -270,8 +298,8 @@ metrics:
     unit: percent per year
     counting_unit: family
     source: patent_data
-    requires_fields: [family_id, priority_date]
-    uses_definitions: [growth_rate, incomplete_period]
+    requires_fields: [family_id, priority_date, filing_office]
+    uses_definitions: [time_basis, growth_rate, incomplete_period, international_family]
     excludes_incomplete_periods: true
     reference_practice: [genai, hydrogen, quantum]
 
@@ -283,7 +311,8 @@ metrics:
     unit: families per year
     counting_unit: family
     source: patent_data
-    requires_fields: [family_id, priority_date]
+    requires_fields: [family_id, priority_date, applicants]
+    uses_definitions: [time_basis, incomplete_period, applicant_normalization]
     excludes_incomplete_periods: true
     reference_practice: [ai_science]
 
@@ -297,7 +326,7 @@ metrics:
     counting_unit: family
     source: patent_data
     requires_fields: [family_id, priority_date, applicants, legal_status]
-    uses_definitions: [applicant_normalization]
+    uses_definitions: [time_basis, applicant_normalization, legal_status_basis]
     reference_practice: [wind]
 
   # --- applicants and inventors
@@ -311,18 +340,20 @@ metrics:
     counting_unit: family
     source: patent_data
     requires_fields: [family_id, applicants, priority_date]
-    uses_definitions: [applicant_normalization]
+    uses_definitions: [time_basis, applicant_normalization]
     reference_practice: [genai, wind, hydrogen, quantum, ai_science]
 
   - id: applicant_sector_share
     name: Applicant sector share
     definition: >-
       Share of families by applicant sector (company, university or public research,
-      individual, other), assigned by deterministic rules. Unknown sector is reported as such.
+      individual, other) per year, assigned by deterministic rules. Unknown sector is reported
+      as such.
     unit: percent
     counting_unit: family
     source: patent_data
-    requires_fields: [family_id, applicants]
+    requires_fields: [family_id, applicants, priority_date]
+    uses_definitions: [time_basis, applicant_normalization]
     reference_practice: [wind, quantum, hydrogen]
 
   - id: newcomers
@@ -334,17 +365,22 @@ metrics:
     counting_unit: applicant
     source: patent_data
     requires_fields: [family_id, applicants, priority_date]
+    uses_definitions: [time_basis, incomplete_period, applicant_normalization]
+    excludes_incomplete_periods: true
     reference_practice: [wind]
 
   - id: applicant_concentration
     name: Applicant concentration
     definition: >-
-      Share of families held by the top 10 applicants, and the Herfindahl-Hirschman index,
-      i.e. the sum of squared applicant shares, scaled 0 to 10,000.
+      Top-10 share: distinct families with at least one of the ten largest applicants,
+      divided by all in-scope families. Herfindahl-Hirschman index: each family is split
+      equally between its normalised applicants (fractional counting, so shares sum to 1);
+      HHI is the sum of squared applicant shares, times 10,000.
     unit: percent / index
     counting_unit: family
     source: patent_data
     requires_fields: [family_id, applicants]
+    uses_definitions: [applicant_normalization]
     reference_practice: [hydrogen, quantum]
 
   - id: top_inventors
@@ -357,13 +393,15 @@ metrics:
     counting_unit: family
     source: patent_data
     requires_fields: [family_id, inventors, applicants]
+    uses_definitions: [applicant_normalization]
 
   # --- geography
   - id: families_by_filing_office
     name: Families by filing office
     definition: >-
-      Number of families with at least one filing at each patent office, i.e. where
-      protection is sought. A family counts once per office.
+      Number of families with at least one filing at each granting office, i.e. where
+      protection is sought. A family counts once per office. PCT (WO) applications are not a
+      granting office and are reported under PCT usage instead.
     unit: families
     counting_unit: family
     source: patent_data
@@ -409,9 +447,11 @@ metrics:
   - id: country_specialisation
     name: Revealed technological advantage (RTA)
     definition: >-
-      RTA = (country's share of families in a segment) / (country's share of families across
-      all segments of this landscape). RTA above 1 indicates relative specialisation. It is
-      computed per applicant country, with the counting method stated.
+      RTA(c, s) = (A[c,s] / sum over countries of A[k,s]) / (sum over segments of A[c,j] / sum
+      over all countries and segments of A[k,j]). A[c,s] counts the family-segment assignments
+      credited to applicant country c in segment s, with unclassified families excluded and
+      country credit following the configured attribution. RTA above 1 indicates relative
+      specialisation.
     unit: index
     counting_unit: family
     source: classification
@@ -441,7 +481,7 @@ metrics:
     counting_unit: family
     source: classification
     requires_fields: [family_id, priority_date]
-    uses_definitions: [time_basis, growth_rate, incomplete_period]
+    uses_definitions: [time_basis, growth_rate, incomplete_period, segment_labels]
     excludes_incomplete_periods: true
     reference_practice: [genai, wind, hydrogen, quantum]
 
@@ -471,13 +511,13 @@ metrics:
   - id: internationalisation_rate
     name: Internationalisation rate
     definition: >-
-      Share of families that are international patent families, overall, per year, per
-      applicant country and per segment.
+      Share of families that are international patent families, overall, per year and per
+      applicant country. The per-segment split is in the segment profiles.
     unit: percent
     counting_unit: family
     source: patent_data
-    requires_fields: [family_id, filing_office]
-    uses_definitions: [international_family]
+    requires_fields: [family_id, filing_office, priority_date, applicant_countries]
+    uses_definitions: [international_family, time_basis, country_attribution]
     reference_practice: [wind, quantum]
 
   - id: pct_usage
@@ -487,19 +527,21 @@ metrics:
     unit: percent
     counting_unit: family
     source: patent_data
-    requires_fields: [family_id, filing_office]
+    requires_fields: [family_id, filing_office, applicant_countries]
+    uses_definitions: [country_attribution]
 
   # --- legal status
   - id: legal_status_distribution
     name: Legal status distribution
     definition: >-
       Families by legal status category as supplied by the data source (e.g. pending,
-      granted, lapsed, expired, withdrawn, unknown), as of the retrieval date.
+      granted, lapsed, expired, withdrawn, unknown), as of the retrieval date, overall and per
+      year.
     unit: families
     counting_unit: family
     source: patent_data
-    requires_fields: [family_id, legal_status]
-    uses_definitions: [legal_status_basis]
+    requires_fields: [family_id, legal_status, priority_date]
+    uses_definitions: [legal_status_basis, time_basis]
     reference_practice: [ai_science]
 
   - id: granted_share
@@ -510,8 +552,8 @@ metrics:
     unit: percent
     counting_unit: family
     source: patent_data
-    requires_fields: [family_id, legal_status, filing_office]
-    uses_definitions: [legal_status_basis]
+    requires_fields: [family_id, legal_status, filing_office, priority_date, applicants]
+    uses_definitions: [legal_status_basis, time_basis, applicant_normalization]
     reference_practice: [wind, ai_science]
 
   # --- citations and key patents
@@ -524,20 +566,20 @@ metrics:
     counting_unit: family
     source: patent_data
     requires_fields: [family_id, forward_citations, applicants, publication_date]
-    uses_definitions: [self_citation, forward_citation_window]
+    uses_definitions: [self_citation, forward_citation_window, applicant_normalization]
     reference_practice: [wind, quantum, ai_science]
 
   - id: key_patent_score
     name: Key patent ranking
     definition: >-
-      Families ranked by a published formula combining windowed non-self forward citations,
-      number of filing offices and granted status. The formula and weights are printed next to
-      the ranking; there is no subjective selection.
+      Families ranked by the key patent score definition (citations, offices, grant status),
+      with the formula and weights printed next to the ranking. There is no subjective
+      selection.
     unit: score
     counting_unit: family
     source: patent_data
-    requires_fields: [family_id, forward_citations, filing_office, legal_status]
-    uses_definitions: [self_citation, forward_citation_window]
+    requires_fields: [family_id, forward_citations, filing_office, legal_status, applicants, publication_date, priority_date]
+    uses_definitions: [key_patent_formula, self_citation, forward_citation_window, time_basis]
     reference_practice: [ai_science]
 
   - id: npl_citation_share
@@ -559,8 +601,8 @@ metrics:
     unit: citations / years
     counting_unit: family
     source: patent_data
-    requires_fields: [family_id, applicants, forward_citations, priority_date, legal_status]
-    uses_definitions: [self_citation, forward_citation_window]
+    requires_fields: [family_id, applicants, forward_citations, priority_date, legal_status, publication_date]
+    uses_definitions: [self_citation, forward_citation_window, time_basis, applicant_normalization, legal_status_basis]
     reference_practice: [ai_science]
 
   # --- competition
@@ -612,6 +654,7 @@ metrics:
     counting_unit: family
     source: patent_data
     requires_fields: [family_id, cpc, priority_date]
+    uses_definitions: [time_basis]
     reference_practice: [ai_science]
 
   - id: white_space_indicators
@@ -624,7 +667,8 @@ metrics:
     counting_unit: family
     source: classification
     requires_fields: [family_id, cpc, priority_date, applicants]
-    uses_definitions: [white_space_scope, segment_labels]
+    uses_definitions: [white_space_scope, segment_labels, time_basis, growth_rate, incomplete_period, applicant_normalization]
+    excludes_incomplete_periods: true
 
   - id: landscape_map_coordinates
     name: Landscape map coordinates
@@ -636,6 +680,7 @@ metrics:
     counting_unit: family
     source: classification
     requires_fields: [family_id, title, abstract]
+    uses_definitions: [segment_labels]
     reference_practice: [ai_science]
 
 # ------------------------------------------------------------------------------ chart types
@@ -691,10 +736,11 @@ sections:
       Everything a reader needs to judge the numbers: scope, data source, retrieval date,
       definitions, pipeline, measured AI accuracy and limitations.
     source_type: system_metadata
-    required_facts: [run_metadata, relevance_quality, segment_quality, unclassified_share]
+    required_facts: [run_metadata, relevance_quality, segment_quality, unclassified_share, limitations]
     tables:
       - {id: definitions_table, metrics: [run_metadata], shows: "Every canonical definition with the option used in this run."}
       - {id: ai_accuracy_table, metrics: [relevance_quality, segment_quality], shows: "Precision, recall and F1 with confidence intervals and gold-set sizes."}
+      - {id: limitations_table, metrics: [limitations], shows: "Every limitation and non-blocking warning, with the step that raised it."}
     caveats:
       - "This report is an analytical landscape, not legal advice or a freedom-to-operate opinion."
       - "AI-derived labels have measured, not guaranteed, accuracy."
@@ -753,7 +799,7 @@ sections:
     required_facts: [top_applicants, applicant_sector_share, applicant_concentration, newcomers]
     charts:
       - {id: top_applicants_bar, chart_type: horizontal_bar_ranking, metrics: [top_applicants], shows: "Top applicants by families, full period and recent window."}
-      - {id: sector_share_bar, chart_type: stacked_100_bar, metrics: [applicant_sector_share], shows: "Share of families by applicant sector over time."}
+      - {id: sector_share_bar, chart_type: stacked_100_bar, metrics: [applicant_sector_share], shows: "Share of families by applicant sector per priority year."}
     tables:
       - {id: newcomers_table, metrics: [newcomers], shows: "Applicants whose first family falls in the recent window."}
     caveats: ["Rankings depend on name normalisation; merges are listed in the alias appendix."]
@@ -776,11 +822,12 @@ sections:
     purpose: >-
       Where protection is sought, where inventions are made, and where owners are based,
       kept as three separate views, plus specialisation.
-    source_type: patent_data
+    source_type: mixed
     required_facts: [families_by_filing_office, families_by_inventor_country, families_by_applicant_country, priority_vs_protection, country_specialisation]
     charts:
       - {id: filing_office_bar, chart_type: horizontal_bar_ranking, metrics: [families_by_filing_office], shows: "Families per filing office (protection sought)."}
       - {id: inventor_country_map, chart_type: world_map, metrics: [families_by_inventor_country], shows: "Families by inventor country, with a paired ranked table."}
+      - {id: applicant_country_bar, chart_type: horizontal_bar_ranking, metrics: [families_by_applicant_country], shows: "Families by applicant country of residence."}
       - {id: priority_protection_bar, chart_type: grouped_bar, metrics: [priority_vs_protection], shows: "Priority filings versus protection filings per country."}
     caveats: ["Filing office, inventor country and applicant country answer different questions and are never combined."]
     when_data_missing: "Report the share of families with unknown country for each view."
@@ -837,7 +884,7 @@ sections:
     source_type: patent_data
     required_facts: [legal_status_distribution, granted_share]
     charts:
-      - {id: legal_status_bar, chart_type: stacked_100_bar, metrics: [legal_status_distribution], shows: "Status composition per filing year."}
+      - {id: legal_status_bar, chart_type: stacked_100_bar, metrics: [legal_status_distribution], shows: "Status composition per priority year."}
     caveats: ["Status is as supplied by the data source on the retrieval date; it is not legal advice."]
     when_data_missing: "If the source provides no legal status, the section states this and shows no chart."
     reference_practice: [ai_science, wind]
@@ -892,7 +939,9 @@ sections:
       Areas of relatively low activity within the scope, from deterministic indicators, with
       any interpretation labelled.
     source_type: mixed
-    required_facts: [white_space_indicators]
+    required_facts: [white_space_indicators, landscape_map_coordinates]
+    tables:
+      - {id: white_space_table, metrics: [white_space_indicators], shows: "Low-density, high-growth segments and uncovered segment/applicant combinations."}
     charts:
       - {id: landscape_density_map, chart_type: landscape_map, metrics: [landscape_map_coordinates], shows: "Families on a 2-D embedding map with labelled clusters."}
     caveats: ["White space is indicative and relative to this report's scope; it does not mean nothing has been patented."]

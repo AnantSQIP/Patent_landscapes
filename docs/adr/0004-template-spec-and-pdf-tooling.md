@@ -11,9 +11,16 @@
 * the chart-type catalog;
 * the sections (§9) with their facts, charts, tables, caveats and missing-data behaviour.
 
-`patsquire_plr.template.spec` validates it strictly, including cross-references:
-* no unknown or unused metrics, chart types, definitions or references;
-* every §9 section present, in order.
+`patsquire_plr.template.spec` validates it strictly:
+* **Cross-references:** no unknown or unused metrics, chart types, definitions or references,
+  and every §9 section present, in order.
+* **Field sufficiency:** a metric that uses a definition must list the record fields that
+  definition needs. For example, using `time_basis` requires `priority_date`, and
+  `forward_citation_window` requires `forward_citations` and `publication_date`.
+* **Time consistency:** any metric that places families in time must use `time_basis`, and
+  any metric that excludes incomplete periods must use `incomplete_period`.
+* **Source consistency:** a `patent_data` section may only use `patent_data` metrics, and
+  segment metrics must come from `classification`.
 
 `docs/definitions.md` is generated from the template, and a test fails if it is stale.
 
@@ -34,6 +41,8 @@ pypdfium2 (Apache-2.0/BSD-3) cover text, outline and page rendering. fpdf2 (LGPL
 
 ## Decision 3: an originality check for principle 9
 `plr reference check-originality` flags any 8-word phrase that our documents share with
-reference headings or captions. It is evidence, not proof, because only headings and
+reference headings or captions. It also flags any whole heading of 4+ words, since headings
+are usually too short for 8-word matching. Cover-page titles are exempt because citing a
+report means quoting its title. The check is evidence, not proof, because only headings and
 captions are compared. It runs locally, because the extracts contain copyrighted text and
 are not committed.

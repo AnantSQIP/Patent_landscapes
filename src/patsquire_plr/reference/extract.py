@@ -220,10 +220,23 @@ def extract_reference(pdf_path: Path) -> ReferenceExtract:
 
 
 def extract_directory(pdf_dir: Path, out_dir: Path) -> list[Path]:
-    """Extract every ``*.pdf`` in ``pdf_dir`` (non-recursive) to ``<out_dir>/<stem>.json``."""
-    pdfs = sorted(pdf_dir.glob("*.pdf"))
+    """Extract every PDF under ``pdf_dir`` (recursive, any case of ``.pdf``) to
+    ``<out_dir>/<stem>.json``. Anything already inside ``out_dir`` is skipped, and two PDFs
+    with the same file stem are an error rather than one silently overwriting the other.
+    """
+    resolved_out = out_dir.resolve()
+    pdfs = sorted(
+        p
+        for p in pdf_dir.rglob("*")
+        if p.is_file()
+        and p.suffix.lower() == ".pdf"
+        and not p.resolve().is_relative_to(resolved_out)
+    )
     if not pdfs:
-        raise ExtractionError(f"No PDF files found in {pdf_dir}")
+        raise ExtractionError(f"No PDF files found under {pdf_dir}")
+    stems = Counter(p.stem for p in pdfs)
+    if clashes := sorted(stem for stem, n in stems.items() if n > 1):
+        raise ExtractionError(f"Several PDFs share a file name stem, output would clash: {clashes}")
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for pdf_path in pdfs:
@@ -258,6 +271,8 @@ def render_pages(
 
 
 SHINGLE_WORDS = 8
+# Headings shorter than this ("Introduction", "Top applicants") are generic, not authorship.
+MIN_HEADING_WORDS = 4
 _WORD = re.compile(r"[a-z0-9]+")
 
 
@@ -269,15 +284,26 @@ def _shingles(text: str, size: int) -> set[tuple[str, ...]]:
 def copied_phrases(
     text: str, extracts: Iterable[ReferenceExtract], *, size: int = SHINGLE_WORDS
 ) -> list[tuple[str, str]]:
-    """Runs of ``size`` consecutive words that ``text`` shares with any reference heading or
-    caption, as ``(file_name, phrase)`` pairs. Used to check principle 9 (no copied text).
+    """Phrases ``text`` shares with the reference extracts, as ``(file_name, phrase)`` pairs.
 
-    Only headings and captions are compared, since those are all the extracts hold. An empty
-    result is evidence, not proof, that no text was copied.
+    Two checks are made. Any run of ``size`` consecutive words shared with a heading or
+    caption is reported, and so is any whole heading of ``MIN_HEADING_WORDS`` or more words
+    that appears in ``text``. Used to check principle 9 (no copied text). Only headings and
+    captions are compared, since those are all the extracts hold, so an empty result is
+    evidence, not proof, that no text was copied.
     """
     ours = _shingles(text, size)
+    our_text = " " + " ".join(_WORD.findall(text.lower())) + " "
     found: set[tuple[str, str]] = set()
     for extract in extracts:
+        # Headings are usually shorter than a shingle, so also match them whole. Cover-page
+        # headings (page 1) are the report's title, which we quote on purpose to cite it.
+        for heading in extract.headings:
+            if heading.page == 1:
+                continue
+            words = _WORD.findall(heading.title.lower())
+            if len(words) >= MIN_HEADING_WORDS and f" {' '.join(words)} " in our_text:
+                found.add((extract.file_name, " ".join(words)))
         pieces = [h.title for h in extract.headings] + [
             f"{c.label} {c.text}" for c in extract.captions
         ]

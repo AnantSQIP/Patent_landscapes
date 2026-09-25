@@ -11,12 +11,14 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
 - `docs/reference_analysis.md`: per-report structure, counting rules, search disclosure,
   metrics and charts, a cross-report comparison, and the design decisions taken.
 - `template/plr_template.yaml`, validated by `patsquire_plr.template.spec`:
-  * 14 canonical definitions;
-  * 41 metrics;
+  * 15 canonical definitions (including an explicit key-patent formula);
+  * 42 metrics (including a limitations register);
   * 17 chart types;
   * 18 §9 sections, plus a per-segment profile block and 9 appendices.
 
   Cross-reference checks reject unknown or unused items and missing or out-of-order sections.
+  Consistency rules reject metrics missing the record fields their definitions need, time
+  series that don't use the time basis, and sections whose source type contradicts their facts.
 - `docs/definitions.md`, generated from the template and kept in sync by a test.
 - `plr reference check-originality` (principle 9). It finds no copied phrases in the Phase 1
   documents.

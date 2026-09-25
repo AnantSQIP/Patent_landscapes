@@ -182,3 +182,24 @@ def test_cli_reports_extraction_errors_with_exit_1(tmp_path: Path) -> None:
     assert "No PDF files found" in extracted.stderr
     assert rendered.exit_code == 1
     assert "PDF not found" in rendered.stderr
+
+
+def test_extract_directory_is_recursive_and_case_insensitive(tmp_path: Path) -> None:
+    pdf_dir = tmp_path / "pdfs"
+    (pdf_dir / "nested").mkdir(parents=True)
+    _pdf(pdf_dir / "a.pdf", bookmarks=True)
+    _pdf(pdf_dir / "nested" / "b.PDF", bookmarks=True)
+
+    written = extract_directory(pdf_dir, pdf_dir / "extracted")
+
+    assert [p.name for p in written] == ["a.json", "b.json"]
+
+
+def test_extract_directory_rejects_clashing_stems(tmp_path: Path) -> None:
+    pdf_dir = tmp_path / "pdfs"
+    (pdf_dir / "nested").mkdir(parents=True)
+    _pdf(pdf_dir / "report.pdf", bookmarks=True)
+    _pdf(pdf_dir / "nested" / "report.pdf", bookmarks=True)
+
+    with pytest.raises(ExtractionError, match=r"share a file name stem.*report"):
+        extract_directory(pdf_dir, tmp_path / "out")

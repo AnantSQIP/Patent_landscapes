@@ -4,6 +4,41 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added: Phase 2, data model, provenance, fact store, audit log, model gateway
+- **Canonical `PatentDocument`:**
+  * every field has a value or an explicit missing reason;
+  * raw identifiers are kept next to normalised ones;
+  * publication numbers and CPC/IPC codes are parsed strictly;
+  * it maps to every template record field.
+- **Schema:** PostgreSQL schema and Alembic migration 0001, with pgvector. Append-only
+  triggers block UPDATE, DELETE and TRUNCATE on raw records, documents, facts, the audit log
+  and model calls. An ORM-vs-migration drift test keeps them in sync.
+- **Documents:** exact store/load round trip for canonical documents.
+- **Audit log:** hash-chained, with serialised appends and tamper detection (`verify_chain`).
+- **Fact store (Layer 3):** facts are accepted only when at least two implementations agree
+  exactly on the same inputs. Floats are banned in favour of Decimal, and mismatches are
+  kept as evidence.
+- **Model gateway:**
+  * backends, five roles and four provider adapters, verified against the current SDKs;
+  * persistent cache and append-only call log;
+  * retries, rate limits, and strict structured output with repair turns.
+- **`plr models health`,** plus an Ollama compose service. Live tests make real model calls
+  and show that switching backends is configuration-only.
+- `plr db upgrade/current`, ADRs 0005 (data sources) and 0006 (model gateway), and the
+  provider API reference.
+- **Review fixes:**
+  * Only complete model output is accepted; filtered, guardrailed and context-overflow
+    output fails instead of being cached.
+  * Unclassified adapter exceptions are logged.
+  * Embedding cache hits are logged per text, and batch rows list every key.
+  * Bedrock embeddings are rate-limited and retried per request.
+  * The structured cache stores the exact validated text.
+  * The cache key includes the server's URL and region.
+  * Temperature 0 and a seed are enforced, and prices must be set in pairs.
+  * Migration 0002: positional keys for repeated CPC codes and citations, and
+    `ingest_batch.source_api_version` (§6).
+
+
 ### Added: Phase 1, reference analysis and template specification
 - `plr reference extract/render`: structure extraction (PDF outline or font-size headings,
   figure/table/box captions, pages without text) and page rendering for the reference PLRs.

@@ -9,7 +9,13 @@ from typing import Annotated
 import typer
 
 from patsquire_plr.config import Settings, load_settings
+from patsquire_plr.db import migrate
+from patsquire_plr.db.engine import create_db_engine
 from patsquire_plr.errors import ConfigError
+from patsquire_plr.gateway.gateway import ModelGateway
+from patsquire_plr.gateway.health import check_models
+from patsquire_plr.gateway.secrets import SecretResolver
+from patsquire_plr.gateway.store import PostgresCallStore
 from patsquire_plr.health import default_checks, run_checks
 from patsquire_plr.log import configure_logging
 from patsquire_plr.reference.extract import (
@@ -30,6 +36,10 @@ reference_app = typer.Typer(
 app.add_typer(reference_app, name="reference")
 template_app = typer.Typer(no_args_is_help=True, help="Validate and document the report template.")
 app.add_typer(template_app, name="template")
+db_app = typer.Typer(no_args_is_help=True, help="Database schema migrations.")
+app.add_typer(db_app, name="db")
+models_app = typer.Typer(no_args_is_help=True, help="Model backends and roles.")
+app.add_typer(models_app, name="models")
 
 TemplateOption = Annotated[Path, typer.Option("--template", help="Template specification YAML.")]
 DEFAULT_TEMPLATE = Path("template/plr_template.yaml")
@@ -183,3 +193,63 @@ def reference_check_originality(
     if copied:
         raise typer.Exit(code=1)
     typer.echo(f"No copied phrases in {len(files)} file(s) against {len(extracts)} reports.")
+
+
+@db_app.command("upgrade")
+def db_upgrade(
+    config_file: ConfigFileOption = DEFAULT_CONFIG_FILE,
+    env_file: EnvFileOption = None,
+    revision: Annotated[str, typer.Option(help="Target revision.")] = "head",
+) -> None:
+    """Apply database migrations up to REVISION (default: the latest)."""
+    engine = create_db_engine(_load(config_file, env_file).database)
+    try:
+        migrate.upgrade(engine, revision)
+        typer.echo(f"database at revision {migrate.current_revision(engine)}")
+    finally:
+        engine.dispose()
+
+
+@db_app.command("current")
+def db_current(
+    config_file: ConfigFileOption = DEFAULT_CONFIG_FILE,
+    env_file: EnvFileOption = None,
+) -> None:
+    """Print the database's current migration revision ('none' if unmigrated)."""
+    engine = create_db_engine(_load(config_file, env_file).database)
+    try:
+        typer.echo(migrate.current_revision(engine) or "none")
+    finally:
+        engine.dispose()
+
+
+@models_app.command("health")
+def models_health(
+    config_file: ConfigFileOption = DEFAULT_CONFIG_FILE,
+    env_file: EnvFileOption = None,
+) -> None:
+    """Send a real request to every configured role. Exits 1 if any role fails."""
+    settings = _load(config_file, env_file)
+    engine = create_db_engine(settings.database)
+    try:
+        gateway = ModelGateway(
+            settings.models,
+            secrets=SecretResolver(env_file=env_file),
+            store=PostgresCallStore(engine),
+        )
+        results = check_models(gateway, settings.models)
+    finally:
+        engine.dispose()
+    healthy = all(r.ok for r in results)
+    typer.echo(
+        json.dumps(
+            {
+                "healthy": healthy,
+                "roles": [r.model_dump() for r in results],
+                "warnings": settings.models.warnings(),
+            },
+            indent=2,
+        )
+    )
+    if not healthy:
+        raise typer.Exit(code=1)

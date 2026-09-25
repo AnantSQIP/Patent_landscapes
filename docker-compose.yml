@@ -71,6 +71,14 @@ services:
         echo "bucket $$PLR_BUCKET ready"
     restart: "no"
 
+  # On-prem model server (OpenAI-compatible API). Opt in with: --profile llm
+  # Pull models once: docker compose exec ollama ollama pull qwen2.5:0.5b (and all-minilm:22m)
+  ollama:
+    image: ollama/ollama:0.34.4
+    profiles: [llm]
+    ports: ["127.0.0.1:${PLR_OLLAMA_HOST_PORT:?set PLR_OLLAMA_HOST_PORT in .env}:11434"]
+    volumes: [ollama-models:/root/.ollama]
+
   # The app image; runs `plr health` against the services above.
   app:
     build: {context: ., dockerfile: docker/app.Dockerfile}
@@ -91,6 +99,7 @@ services:
     command: ["plr", "health"]
 
 volumes:
+  ollama-models:
   postgres-data:
   redis-data:
   minio-data:

@@ -5,8 +5,8 @@ patent ID in a report must trace back to retrieved patent data through an audit 
 The full specification is in [`PLR_System_Build_Prompt.md`](PLR_System_Build_Prompt.md),
 and background on PLRs is in [`PLR_Complete_Guide.md`](PLR_Complete_Guide.md).
 
-**Status:** Phase 0 (foundation) is done; Phase 1 (reference analysis and template
-specification) is awaiting review. See [`CHANGELOG.md`](CHANGELOG.md).
+**Status:** Phases 0–1 are done. Phase 2 (data model, provenance, fact store, audit log and
+model gateway) is awaiting review. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Quick start (WSL / Linux)
 
@@ -51,6 +51,8 @@ Secrets are masked in `repr`, in `plr config show` and in logs. See
 | `plr reference check-originality FILES...` | Fails if FILES share an 8-word phrase with reference headings or captions. |
 | `plr template validate` | Validates `template/plr_template.yaml` and its cross-references. |
 | `plr template definitions` | Prints `docs/definitions.md`, which is generated from the template. |
+| `plr db upgrade` / `plr db current` | Applies or shows database migrations. |
+| `plr models health` | Makes a real call to every model role (see Models below). Exits 1 on any failure. |
 
 ## Tests
 
@@ -58,6 +60,24 @@ Secrets are masked in `repr`, in `plr config show` and in logs. See
 * `make test-integration`: real Postgres, Redis and MinIO containers via testcontainers
   (needs Docker). These tests fail rather than skip when Docker is missing.
 * `make test`: everything, with the 90% coverage gate. This is what CI runs.
+
+## Models
+
+Roles (`embedding`, `bulk_classifier`, `reasoner`, `writer`, `critic`) map to backends in
+`config/settings.yaml` under `models:`. Supported backend types are `openai_compatible`
+(OpenAI, vLLM, SGLang, Ollama), `anthropic`, `gemini` and `bedrock`. API keys go in `.env`
+and are referenced by name (`api_key_env`). For local development:
+
+```bash
+docker compose --env-file .env --profile llm up -d ollama
+docker compose --env-file .env exec ollama ollama pull qwen2.5:0.5b
+docker compose --env-file .env exec ollama ollama pull all-minilm:22m
+uv run plr db upgrade --env-file .env
+uv run plr models health --env-file .env
+```
+
+See [ADR 0006](docs/adr/0006-model-gateway.md) and the verified
+[provider API reference](docs/architecture/provider_apis.md).
 
 ## Contributing
 

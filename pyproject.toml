@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "boto3>=1.35",
+    "pdfplumber>=0.11",
     "psycopg[binary]>=3.2",
     "pydantic>=2.9",
     "python-dotenv>=1.0",
@@ -22,6 +23,7 @@ plr = "patsquire_plr.cli:app"
 [dependency-groups]
 dev = [
     "boto3-stubs[s3]>=1.35",
+    "fpdf2>=2.8",
     "hypothesis>=6.120",
     "mypy>=1.13",
     "pre-commit>=4.0",
@@ -71,7 +73,8 @@ plugins = ["pydantic.mypy"]
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["testcontainers.*"]
+# No type information shipped; calls into these are wrapped in typed functions.
+module = ["testcontainers.*", "pypdfium2", "pypdfium2.*"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]

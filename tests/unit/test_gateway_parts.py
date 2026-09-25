@@ -217,3 +217,32 @@ def test_same_writer_and_critic_model_is_a_warning_not_an_error() -> None:
     assert ModelsSettings.model_validate(data).warnings() == []
     roles["critic"]["model"] = "chat-model"
     assert "independent model is recommended" in ModelsSettings.model_validate(data).warnings()[0]
+
+
+@pytest.mark.parametrize(
+    ("backend", "message"),
+    [
+        ({"type": "anthropic", "api_key_env": None}, "anthropic backends need api_key_env"),
+        ({"type": "gemini", "api_key_env": None}, "gemini backends need api_key_env"),
+        ({"type": "bedrock", "region": None}, "bedrock backends need region"),
+        ({"type": "bedrock", "region": "us-east-1", "api_key_env": "K"}, "AWS credential chain"),
+        (
+            {"type": "anthropic", "api_key_env": "K", "base_url": "http://x"},
+            "base_url is only used",
+        ),
+    ],
+)
+def test_backend_type_rules(backend: dict[str, object], message: str) -> None:
+    from patsquire_plr.config import BackendSettings  # noqa: PLC0415 - kept next to its tests
+
+    values: dict[str, object] = {
+        "base_url": None,
+        "api_key_env": None,
+        "region": None,
+        "max_tokens_field": None,
+        "timeout_s": 5,
+        "max_retries": 0,
+        "requests_per_minute": 1,
+    } | backend
+    with pytest.raises(ValidationError, match=message):
+        BackendSettings.model_validate(values)

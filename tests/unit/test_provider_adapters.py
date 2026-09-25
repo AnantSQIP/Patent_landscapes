@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import io
 import json
+from typing import TYPE_CHECKING, cast
 
 import boto3
 import httpx
 import httpx2
 import pytest
+from botocore.exceptions import ReadTimeoutError
 from botocore.response import StreamingBody
 from botocore.stub import Stubber
 from pydantic import SecretStr
@@ -24,6 +26,9 @@ from patsquire_plr.gateway.providers.base import GenerationParams, JsonSchemaSpe
 from patsquire_plr.gateway.providers.bedrock import BedrockAdapter
 from patsquire_plr.gateway.providers.gemini import GeminiAdapter
 from patsquire_plr.gateway.providers.openai_compatible import OpenAICompatibleAdapter
+
+if TYPE_CHECKING:
+    from mypy_boto3_bedrock_runtime import BedrockRuntimeClient
 
 SCHEMA = JsonSchemaSpec(
     name="Verdict",
@@ -439,3 +444,103 @@ def test_bedrock_refuses_seed() -> None:
 
 def _streaming(data: bytes) -> StreamingBody:
     return StreamingBody(io.BytesIO(data), len(data))
+
+
+# ---------------------------------------------------------------- remaining error paths
+
+
+def test_openai_embedding_errors_and_count_mismatch() -> None:
+    with pytest.raises(RetryableProviderError):
+        _openai(Recorder(429, {"error": {"message": "slow down"}})).embed(model="m", texts=["a"])
+    with pytest.raises(PermanentProviderError):
+        _openai(Recorder(404, {"error": {"message": "no such model"}})).embed(
+            model="m", texts=["a"]
+        )
+    short = Recorder(
+        200,
+        {
+            "object": "list",
+            "model": "m",
+            "data": [],
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        },
+    )
+    with pytest.raises(PermanentProviderError, match="No embedding data received"):
+        _openai(short).embed(model="m", texts=["a"])
+
+
+def test_gemini_embeddings_and_mismatch() -> None:
+    ok = Recorder(200, {"embeddings": [{"values": [0.5, 0.5]}, {"values": [1.0, 0.0]}]})
+    response = _gemini(ok).embed(model="gemini-embedding-001", texts=["a", "b"])
+    assert response.vectors == ((0.5, 0.5), (1.0, 0.0))
+    assert (
+        "models/gemini-embedding-001:batchEmbedContents" in ok.requests[0][0]
+        or "embedContent" in ok.requests[0][0]
+    )
+    with pytest.raises(PermanentProviderError, match="2 texts sent but 1 complete embeddings"):
+        _gemini(Recorder(200, {"embeddings": [{"values": [1.0]}]})).embed(
+            model="m", texts=["a", "b"]
+        )
+    with pytest.raises(RetryableProviderError):
+        _gemini(
+            Recorder(503, {"error": {"code": 503, "message": "x", "status": "UNAVAILABLE"}})
+        ).embed(model="m", texts=["a"])
+
+
+def test_gemini_transport_timeouts_are_retryable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("timed out", request=request)
+
+    adapter = GeminiAdapter(
+        api_key=SecretStr("k"),
+        timeout_s=1,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    with pytest.raises(RetryableProviderError, match="ConnectTimeout"):
+        adapter.chat(model="m", system="S", messages=MESSAGES, params=PARAMS, json_schema=None)
+
+
+class _TimingOutBedrock:
+    """TEST-ONLY stand-in for a bedrock-runtime client whose network times out."""
+
+    def converse(self, **_: object) -> dict[str, object]:
+        raise ReadTimeoutError(endpoint_url="https://bedrock-runtime.test")
+
+    def invoke_model(self, **_: object) -> dict[str, object]:
+        raise ReadTimeoutError(endpoint_url="https://bedrock-runtime.test")
+
+
+def test_bedrock_timeouts_are_retryable() -> None:
+    adapter = BedrockAdapter(
+        region="us-east-1", timeout_s=1, client=cast("BedrockRuntimeClient", _TimingOutBedrock())
+    )
+    with pytest.raises(RetryableProviderError, match="ReadTimeoutError"):
+        adapter.chat(
+            model="m", system="S", messages=MESSAGES, params=BEDROCK_PARAMS, json_schema=None
+        )
+    with pytest.raises(RetryableProviderError, match="ReadTimeoutError"):
+        adapter.embed(model="amazon.titan-embed-text-v2:0", texts=["a"])
+
+
+def test_bedrock_truncation_and_missing_embedding_fail() -> None:
+    adapter, stubber = _bedrock()
+    stubber.add_response(
+        "converse",
+        {
+            "output": {"message": {"role": "assistant", "content": [{"text": "partial"}]}},
+            "stopReason": "max_tokens",
+            "usage": {"inputTokens": 1, "outputTokens": 64, "totalTokens": 65},
+            "metrics": {"latencyMs": 1},
+        },
+    )
+    stubber.add_response(
+        "invoke_model",
+        {"body": _streaming(b'{"embeddingsByType": {}}'), "contentType": "application/json"},
+    )
+    with stubber:
+        with pytest.raises(PermanentProviderError, match="truncated"):
+            adapter.chat(
+                model="m", system="S", messages=MESSAGES, params=BEDROCK_PARAMS, json_schema=None
+            )
+        with pytest.raises(PermanentProviderError, match="no 'embedding' field"):
+            adapter.embed(model="amazon.titan-embed-text-v2:0", texts=["a"])

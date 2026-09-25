@@ -126,7 +126,8 @@ class OpenAICompatibleAdapter:
             response = self._client.embeddings.create(model=model, input=texts)
         except _RETRYABLE as exc:
             raise RetryableProviderError(f"openai_compatible: {type(exc).__name__}: {exc}") from exc
-        except openai.OpenAIError as exc:
+        except (openai.OpenAIError, ValueError) as exc:
+            # The SDK raises a plain ValueError("No embedding data received") for empty data.
             raise PermanentProviderError(f"openai_compatible: {type(exc).__name__}: {exc}") from exc
         data = sorted(response.data, key=lambda item: item.index)
         if len(data) != len(texts):

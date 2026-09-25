@@ -34,7 +34,6 @@ Applications are generally published about 18 months after filing, so the most r
 
 * Default: `18_months`
 * Options: `18_months`, `24_months`
-* **Needs owner decision** before the first production report.
 
 ### International patent family (IPF) (`international_family`)
 
@@ -42,7 +41,6 @@ Under two_or_more_offices, a family is international when it has filings at two 
 
 * Default: `two_or_more_offices`
 * Options: `two_or_more_offices`, `two_or_more_offices_or_ep_or_pct`
-* **Needs owner decision** before the first production report.
 
 ### Country attribution (`country_attribution`)
 
@@ -93,7 +91,6 @@ Forward citations are counted within a fixed number of years after the cited fam
 score = 0.5 x c + 0.3 x o + 0.2 x g. Here c is the family's percentile rank (0 to 1) of windowed non-self forward citations, o is its percentile rank of distinct granting offices, and g is 1 if any member is granted, else 0. Percentile ranks are computed within the report's dataset. Ties are broken by earliest priority date, then family ID. The weights are printed next to every ranking.
 
 * Default: `citations_0.5_offices_0.3_granted_0.2`
-* **Needs owner decision** before the first production report.
 
 ### Technology segments (`segment_labels`)
 

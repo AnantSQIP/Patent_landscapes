@@ -1,6 +1,6 @@
 # ADR 0004: Template specification as a validated source of truth; PDF tooling
 
-* Status: proposed (Phase 1; accepted when the owner approves the template)
+* Status: accepted (Phase 1; template approved by the owner on 2026-09-25 with default options)
 * Date: 2026-09-25
 
 ## Decision 1: one validated template spec

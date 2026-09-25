@@ -423,8 +423,8 @@ def test_limitations_are_carried_in_the_methodology(spec: TemplateSpec) -> None:
 
 def test_key_patent_formula_is_explicit(spec: TemplateSpec) -> None:
     formula = next(d for d in spec.definitions if d.id == "key_patent_formula")
-    assert "score =" in formula.definition
-    assert formula.needs_owner_decision
+    assert "score = 0.5 x c + 0.3 x o + 0.2 x g" in formula.definition
+    assert formula.default == "citations_0.5_offices_0.3_granted_0.2"  # owner-approved
 
 
 def test_ipf_definition_states_how_ep_and_wo_count(spec: TemplateSpec) -> None:

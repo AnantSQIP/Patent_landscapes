@@ -338,12 +338,14 @@ Each decision below is implemented in `template/plr_template.yaml`.
      coordinates come from our own embeddings (Phase 6) with a documented projection, never a
      proprietary black box.
 
-## 5. Decisions that need the owner's input
+## 5. Owner decisions (resolved 2026-09-25)
 
-These are recorded as configurable defaults in the template and listed again at the end of
-Phase 1:
+The owner approved the template with its default options:
 
-* The IPF rule: does a single EP or PCT filing make a family international? (EPO/OECD: yes.)
-* The family definition: simple (DOCDB) or extended (INPADOC). This depends on the data
-  provider chosen in Phase 3.
-* The incomplete-period length: 18 or 24 months before the retrieval date.
+* **International family:** two or more distinct granting offices. The EPO counts as one
+  office, and a PCT application alone does not count.
+* **Incomplete period:** 18 months before the retrieval date.
+* **Key-patent weights:** 0.5 citations, 0.3 offices, 0.2 granted.
+
+All three remain configurable. The family definition (simple or extended) is still open,
+because it depends on which data sources a report uses (Phase 3).

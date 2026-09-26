@@ -40,6 +40,17 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
   * control characters are refused in terms;
   * the CPC source URL is required;
   * 2000-series indexing codes are checked.
+- **Second audit fixes:**
+  * the final word of a term matches its plural;
+  * Unicode word boundaries;
+  * terms without letters or digits are refused;
+  * a missing abstract makes a record not evaluable instead of a silent "no";
+  * unknown CPC codes are decided from their symbol where possible;
+  * the CPC title search reports terms it cannot use;
+  * taxonomy import needs the base version (no lost edits), and a landscape's first
+    version may be written by a person.
+- **LLM landscape inputs:** CPC research in `docs/research/llm_cpc_codes.md`, a scope with
+  nine owner-confirmed patents, and a researched taxonomy (`examples/`).
 
 ### Added: user PDF folders
 - `plr ingest folder FOLDER`: publication numbers come from the file names, and a data

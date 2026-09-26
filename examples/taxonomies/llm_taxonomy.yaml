@@ -1,0 +1,179 @@
+# LLM taxonomy, written from CPC research on 2026-09-26 (see docs/research/llm_cpc_codes.md).
+# Every segment's search is (LLM keywords) AND (segment CPC codes): no CPC code is specific
+# to language models, so the codes place a patent in a segment and the keywords make it LLM.
+topic: Large language models (LLMs)
+segments:
+- id: model_architecture
+  name: Model architecture
+  definition: 'Neural network architectures of language models: transformers, self-attention and multi-head
+    attention, encoder-decoder and decoder-only designs, and generative networks for text.'
+  includes:
+  - transformer and attention layers
+  - encoder-decoder and decoder-only language models
+  - mixture-of-experts language models
+  excludes:
+  - electrical power transformers
+  - neural architectures used only for images or signals
+  keywords:
+  - &id001
+    term: large language model
+    synonyms:
+    - language model
+    - LLM
+    - generative language model
+    - pre-trained language model
+    - foundation model
+    - generative pre-trained transformer
+    - GPT
+    - neural language model
+  - term: transformer
+    synonyms:
+    - self-attention
+    - multi-head attention
+    - attention mechanism
+    - attention layer
+    - sequence transduction
+    - encoder-decoder
+  cpc:
+  - G06N3/045
+  - G06N3/0475
+  - G06N3/0499
+  - G06N3/0442
+- id: training_and_adaptation
+  name: Training and adaptation
+  definition: Pre-training, fine-tuning and alignment of language models, including instruction tuning,
+    reinforcement learning from human feedback and distillation.
+  includes:
+  - pre-training on text corpora
+  - instruction tuning and RLHF
+  - distilling a large model into a smaller one
+  excludes:
+  - training of non-language models, e.g. image classifiers
+  keywords:
+  - *id001
+  - term: instruction tuning
+    synonyms:
+    - instruction-tuned
+    - reinforcement learning from human feedback
+    - RLHF
+    - language model pre-training
+    - language model fine-tuning
+  cpc:
+  - G06N3/08
+  - G06N20/00
+- id: retrieval_and_prompting
+  name: Retrieval and prompting
+  definition: 'Using language models with prompts, retrieved knowledge or external tools: retrieval-augmented
+    generation, prompt design, in-context learning and question answering over documents.'
+  includes:
+  - retrieval-augmented generation
+  - prompt construction and templates
+  - question answering with retrieved passages
+  - tool and API calling from a language model
+  excludes:
+  - classical keyword search without a language model
+  keywords:
+  - *id001
+  - term: retrieval-augmented generation
+    synonyms:
+    - retrieval augmented
+    - RAG
+    - knowledge retriever
+    - prompt engineering
+    - prompt template
+    - in-context learning
+    - few-shot prompting
+  cpc:
+  - G06F16/3329
+  - G06F16/3344
+  - G06F16/3347
+  - G06F16/345
+  - G06F16/243
+  - G06N5/022
+  - G06F40/49
+- id: text_generation
+  name: Text generation and editing
+  definition: Generating, completing, rewriting, summarising or translating text with language models.
+  includes:
+  - text completion and insertion
+  - rewriting and editing text
+  - summarisation
+  - machine translation with language models
+  excludes:
+  - template-only document formatting
+  keywords:
+  - *id001
+  - term: text generation
+    synonyms:
+    - natural language generation
+    - generated text
+    - text completion
+    - text insertion
+  cpc:
+  - G06F40/20
+  - G06F40/30
+  - G06F40/40
+  - G06F40/166
+  - G06F40/253
+- id: dialogue_assistants
+  name: Dialogue and assistants
+  definition: Chatbots, conversational agents and virtual assistants built on language models.
+  includes:
+  - LLM-based chatbots
+  - conversational agents
+  - voice assistants using language models
+  excludes:
+  - rule-based chatbots without a language model
+  keywords:
+  - *id001
+  - term: chatbot
+    synonyms:
+    - conversational agent
+    - conversational AI
+    - dialogue system
+    - dialog system
+    - virtual assistant
+  cpc:
+  - G06F40/35
+  - G06F16/33295
+  - H04L51/02
+  - G10L15/22
+  - G10L15/183
+- id: code_generation
+  name: Code generation
+  definition: Language models that write, complete, explain or document computer source code.
+  includes:
+  - code completion
+  - program synthesis from natural language
+  - generating documentation from code
+  excludes:
+  - model-driven engineering without machine learning
+  keywords:
+  - *id001
+  - term: code generation
+    synonyms:
+    - program synthesis
+    - code completion
+    - source code generation
+  cpc:
+  - G06F8/30
+  - G06F8/33
+  - G06F8/73
+- id: multimodal_models
+  name: Multimodal language models
+  definition: Language models that also take or produce images, video or audio, such as vision-language
+    models.
+  includes:
+  - vision-language models
+  - image understanding with a language model
+  excludes:
+  - image models without a language component
+  keywords:
+  - *id001
+  - term: vision-language model
+    synonyms:
+    - multimodal language model
+    - multimodal model
+    - visual language model
+  cpc:
+  - G06V10/82

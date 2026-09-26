@@ -134,12 +134,22 @@ citations those pages state (citation expansion); it never uses the search pages
 The same logical query is applied in code to records that are already stored. This is how
 counts are made for the citation-expansion universe.
 
-**Matching rules**
-- Text matches whole words, case-insensitively.
+**Text matching** (the same pattern is used for BigQuery):
+- Words are letters and digits of any script; matching is case-insensitive.
 - Hyphens and spaces are treated alike.
-- There is no stemming, so it can match fewer records than a provider engine that stems.
+- The final word of a term may be plural ("s"/"es"): "language model" finds "language
+  models", and "LLM" finds "LLMs". There is no other stemming.
+- Title and abstract are matched separately.
+- A term without letters or digits is refused.
+
+**CPC matching**
 - CPC matching uses the scheme's hierarchy.
+- A code missing from the loaded version is decided from its symbol where that settles
+  it: a different subclass or main group is outside, and a code inside a queried subclass
+  is inside.
 
 **Records that cannot be evaluated**
-- A record that cannot be evaluated (no date, no text, no codes, or codes missing from the
-  scheme version) is counted separately, and the count is marked as a lower bound.
+- A record is "not evaluable" when there is no date, when the text did not match and the
+  title or abstract is missing, when it has no codes, or when an unknown code in the same
+  main group leaves the CPC condition unsettled.
+- Such records are counted separately, and the count is marked as a lower bound.

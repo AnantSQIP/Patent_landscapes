@@ -91,6 +91,7 @@ classification:
     max_judge_failure_rate: "0.2000"
   segments:
     embedding_threshold: "0.4500"
+    margin: "0.0500"
   evaluation:
     min_gold_labels: 100
     min_gold_positives: 20

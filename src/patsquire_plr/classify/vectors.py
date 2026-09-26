@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from decimal import ROUND_HALF_EVEN, Decimal
 
@@ -41,8 +42,16 @@ class Prototype:
     text: str
 
 
-def segment_prototype_text(segment: SegmentSpec) -> str:
-    terms = "; ".join(segment.terms())
+def shared_terms(segments: Sequence[SegmentSpec]) -> set[str]:
+    """Terms every segment lists (case-insensitive), e.g. the topic's own keywords. They say
+    nothing about which segment a family belongs to."""
+    sets = [{t.casefold() for t in s.terms()} for s in segments]
+    return set.intersection(*sets) if len(sets) > 1 else set()
+
+
+def segment_prototype_text(segment: SegmentSpec, shared: AbstractSet[str] = frozenset()) -> str:
+    """A segment in words the embedding can compare, without the terms all segments share."""
+    terms = "; ".join(t for t in segment.terms() if t.casefold() not in shared)
     includes = "; ".join(segment.includes)
     return f"{segment.name}: {segment.definition} Includes: {includes}. Keywords: {terms}."
 

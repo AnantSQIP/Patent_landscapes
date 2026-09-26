@@ -65,18 +65,20 @@ RELEVANCE_PROMPT = PromptTemplate(
 
 SEGMENT_PROMPT = PromptTemplate(
     id="segments.classify",
-    version="1",
+    version="2",
     system=(
         "You are a patent analyst assigning a patent to the segments of a landscape. A "
-        "patent may belong to several segments or to none. Use only the patent text. For "
-        "each segment you assign, quote the evidence exactly as it appears in the patent "
-        "text. Use only the segment ids given. Reply only with JSON matching the schema."
+        "patent may belong to several segments or to none. Decide from the PATENT TEXT "
+        "only. For each segment you assign, the evidence must be a phrase copied word for "
+        "word from the PATENT TEXT (never from the segment list, never your own words). "
+        "Use only the segment ids given. Reply only with JSON matching the schema."
     ),
     user=(
-        "Segments (id: name - definition; includes; excludes):\n{segments}\n\n"
-        "Patent text:\n{text}\n\n"
-        "List the segments this patent belongs to, each with an exact quote as evidence. "
-        "Return an empty list if none fits."
+        "SEGMENT LIST (id: name - definition; includes; excludes):\n{segments}\n\n"
+        "PATENT TEXT (quote evidence only from here):\n<<<\n{text}\n>>>\n\n"
+        "List the segments this patent clearly belongs to. For each, copy a phrase of "
+        "about 5 to 15 words from the PATENT TEXT as evidence. Return an empty list if none "
+        "fits."
     ),
 )
 
@@ -98,14 +100,18 @@ def _normal(text: str) -> str:
     return " ".join(text.casefold().split())
 
 
-def evidence_problem(evidence: str, text: str) -> str | None:
-    """Why the quoted evidence cannot be accepted, or None if it is in the text."""
+def evidence_problem(evidence: str, text: str, prompt_material: str = "") -> str | None:
+    """Why the quoted evidence cannot be accepted, or None if it is in the text.
+    ``prompt_material`` is other text the model was shown (e.g. the segment list); a quote
+    from there is named as such, since it proves nothing about the patent."""
     quote = _normal(evidence).strip(" .\"'")
     if len(quote) < MIN_EVIDENCE_CHARS:
         return f"evidence quote is shorter than {MIN_EVIDENCE_CHARS} characters"
-    if quote not in _normal(text):
-        return f"evidence is not in the patent text: {evidence[:80]!r}"
-    return None
+    if quote in _normal(text):
+        return None
+    if prompt_material and quote in _normal(prompt_material):
+        return f"evidence quotes the segment list, not the patent: {evidence[:60]!r}"
+    return f"evidence is not in the patent text: {evidence[:80]!r}"
 
 
 def confident_enough(confidence: str, minimum: str) -> bool:

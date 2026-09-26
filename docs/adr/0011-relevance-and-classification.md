@@ -35,8 +35,14 @@
   borderline family with no usable answer. Nothing is forced.
 
 **Segments (multi-label, relevant families)**
-* The embedding votes on similarity to each segment prototype. The judge (prompt
-  `segments.classify` v1) assigns segments, each with quoted evidence.
+* The embedding votes on similarity to each segment prototype. A prototype leaves out
+  terms that every segment lists (the topic's own keywords, which say nothing about the
+  segment). The vote is yes when the similarity reaches the threshold and is within
+  `margin` of the family's best segment.
+* The judge (prompt `segments.classify` v2) assigns segments. Its evidence must be quoted
+  from the patent text, which the prompt marks separately. A quote copied from the segment
+  list is named as such.
+* A "yes" whose evidence is rejected counts as unknown, never as "no".
 * Agreement assigns the segment; disagreement is `uncertain`. Unknown segment ids and
   invented evidence are recorded as problems.
 * A relevant family with no segment is `unclassified`.

@@ -58,7 +58,7 @@ def base_config() -> dict[str, dict[str, object]]:
                 "min_judge_confidence": "medium",
                 "max_judge_failure_rate": "0.2000",
             },
-            "segments": {"embedding_threshold": "0.4500"},
+            "segments": {"embedding_threshold": "0.4500", "margin": "0.0500"},
             "evaluation": {
                 "min_gold_labels": 100,
                 "min_gold_positives": 20,

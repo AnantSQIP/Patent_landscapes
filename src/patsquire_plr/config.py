@@ -283,7 +283,12 @@ class RelevanceSettings(_Section):
 
 
 class SegmentSettings(_Section):
-    embedding_threshold: Unit = Field(description="similarity >= this: the embedding votes yes")
+    """The embedding votes yes for a segment when its similarity is at least the threshold
+    and within ``margin`` of the family's best segment (relative, since all segments of one
+    topic are alike)."""
+
+    embedding_threshold: Unit
+    margin: Unit
 
 
 class EvaluationSettings(_Section):

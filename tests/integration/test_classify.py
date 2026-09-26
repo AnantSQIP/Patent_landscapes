@@ -18,6 +18,7 @@ from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
+from patsquire_plr.classification.cpc import CpcScheme
 from patsquire_plr.classification.store import load_cpc_title_list, open_cpc_scheme
 from patsquire_plr.classify.evaluate import evaluate
 from patsquire_plr.classify.gold import LabelError, export_review, export_sample, import_labels
@@ -33,6 +34,7 @@ from patsquire_plr.config import (
 )
 from patsquire_plr.db.datasets import build_dataset
 from patsquire_plr.db.models import (
+    ClassificationRun,
     FamilyText,
     RelevanceDecision,
     SegmentDecision,
@@ -46,6 +48,7 @@ from patsquire_plr.ingest.runner import run_lookup_batch, start_lookup_batch
 from patsquire_plr.landscape.scope import Scope
 from patsquire_plr.landscape.search import create_query_set
 from patsquire_plr.landscape.store import add_taxonomy_version, create_landscape, record_approval
+from patsquire_plr.landscape.taxonomy import KeywordGroup, TaxonomyContent
 from tests.integration.test_ingestion import _pages, _serve, _source
 from tests.integration.test_landscape import _cli_config, _content
 from tests.unit.test_cpc import title_list_zip
@@ -66,7 +69,7 @@ SETTINGS = ClassificationSettings.model_validate(
             "min_judge_confidence": "medium",
             "max_judge_failure_rate": "0.2000",
         },
-        "segments": {"embedding_threshold": "0.4500"},
+        "segments": {"embedding_threshold": "0.4500", "margin": "0.0500"},
         "evaluation": {
             "min_gold_labels": 3,
             "min_gold_positives": 1,
@@ -137,7 +140,31 @@ class ScriptedModels:
         return StructuredResult(value=value, cached=False, backend="t", model="t", cache_key="k")
 
 
-def _prepared(engine: Engine, store: ObjectStorageSettings) -> tuple[uuid.UUID, uuid.UUID]:
+def _two_segments(scheme: CpcScheme) -> TaxonomyContent:
+    """TEST-ONLY taxonomy whose segments share a keyword, as real ones share the topic's."""
+    base = _content(scheme)
+    [ladar] = base.spec.segments
+    shared = KeywordGroup(term="optical sensing", synonyms=())
+    first = ladar.model_copy(update={"keywords": (*ladar.keywords, shared)})
+    second = ladar.model_copy(
+        update={
+            "id": "imaging",
+            "name": "Imaging",
+            "keywords": (KeywordGroup(term="optical imaging", synonyms=()), shared),
+        }
+    )
+    return base.model_copy(
+        update={
+            "spec": base.spec.model_copy(update={"segments": (first, second)}),
+            "cpc": {**base.cpc, "imaging": base.cpc["ladar"]},
+            "suggestions": {"ladar": (), "imaging": ()},
+        }
+    )
+
+
+def _prepared(
+    engine: Engine, store: ObjectStorageSettings, *, two_segments: bool = False
+) -> tuple[uuid.UUID, uuid.UUID]:
     """(dataset, approved query set) over the recorded pages."""
     source = _source(_serve(_pages()))
     batch = start_lookup_batch(engine, source, NUMBERS)
@@ -160,7 +187,7 @@ def _prepared(engine: Engine, store: ObjectStorageSettings) -> tuple[uuid.UUID, 
     version = add_taxonomy_version(
         engine,
         landscape_id=landscape,
-        content=_content(scheme),
+        content=_two_segments(scheme) if two_segments else _content(scheme),
         origin="user_edit",
         scheme_id=row.id,
         cache_keys=[],
@@ -439,3 +466,22 @@ def test_review_and_label_commands(
     assert queue.read_text(encoding="utf-8").count("\n") == 2
     evaluated = json.loads(plr("classify", "evaluate", run_id, code=1))
     assert evaluated["publishable"] is False
+
+
+def test_segment_prototypes_leave_out_shared_terms_and_are_embedded(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    dataset, query_set = _prepared(db_engine, object_storage, two_segments=True)
+    run_id = _run(db_engine, dataset, query_set)
+    with Session(db_engine) as session:
+        run = session.get(ClassificationRun, run_id)
+        assert run is not None
+        assert run.config["shared_terms_excluded"] == ["optical sensing"]
+        finals = {
+            (d.segment_id, d.final)
+            for d in session.scalars(
+                select(SegmentDecision).where(SegmentDecision.run_id == run_id)
+            )
+        }
+    assert ("ladar", "assigned") in finals
+    assert ("imaging", "uncertain") in finals  # judge: no; embedding (same score): yes

@@ -46,6 +46,7 @@ from patsquire_plr.classify.vectors import (
     in_sample,
     relevance_prototypes,
     segment_prototype_text,
+    shared_terms,
 )
 from patsquire_plr.config import ClassificationSettings, ModelRole
 from patsquire_plr.db.audit import append_event
@@ -145,11 +146,15 @@ def classify(
         raise ClassificationError(f"dataset {dataset_id} has no families")
     known = _known_texts(engine, scope.known_relevant)
     prototypes = relevance_prototypes(scope, segments, known)
-    segment_protos = [Prototype(f"segment:{s.id}", segment_prototype_text(s)) for s in segments]
+    shared = shared_terms(segments)
+    segment_protos = [
+        Prototype(f"segment:{s.id}", segment_prototype_text(s, shared)) for s in segments
+    ]
 
     progress(f"embedding {len(families)} family texts and {len(prototypes)} prototypes")
     vectors, embedding_backend, embedding_model = _embed(
-        models, [f.text for f in families if f.text] + [p.text for p in prototypes]
+        models,
+        [f.text for f in families if f.text] + [p.text for p in (*prototypes, *segment_protos)],
     )
 
     relevance = [
@@ -187,6 +192,8 @@ def classify(
             for p in (RELEVANCE_PROMPT, SEGMENT_PROMPT)
         },
         "prototypes": {p.name: text_sha256(p.text) for p in prototypes},
+        "segment_prototypes": {p.name: text_sha256(p.text) for p in segment_protos},
+        "shared_terms_excluded": sorted(shared),
         "taxonomy_content_sha256": version.content_sha256,
     }
     run_id = _store(
@@ -299,36 +306,46 @@ def _judge_segments(
     text = family.text
     if text is None:  # pragma: no cover - only relevant families (which have text) arrive
         raise ClassificationError(f"family {family.family_key} has no text")
+    segment_list = segment_lines(segments, detailed=True)
     answer, call_problem, cache_key = _ask(
-        models,
-        SEGMENT_PROMPT,
-        {"segments": segment_lines(segments, detailed=True), "text": text},
-        SegmentJudgement,
+        models, SEGMENT_PROMPT, {"segments": segment_list, "text": text}, SegmentJudgement
     )
     ids = {s.id for s in segments}
     valid: dict[str, str] = {}
+    rejected: dict[str, str] = {}  # segment -> why the judge's "yes" was not accepted
     problems: list[str] = []
     if answer is not None:
         problems += [f"unknown segment {u}" for u in unknown_segments(answer, ids)]
         for assignment in answer.assignments:
             if assignment.segment_id not in ids:
                 continue
-            issue = evidence_problem(assignment.evidence, text)
+            issue = evidence_problem(assignment.evidence, text, segment_list)
             if issue:
                 problems.append(f"{assignment.segment_id}: {issue}")
+                rejected.setdefault(assignment.segment_id, issue)
             else:
                 valid[assignment.segment_id] = assignment.evidence
+    scores = [cosine(vectors[text], vectors[proto.text]) for proto in segment_protos]
+    best = max(scores)
+    threshold, margin = settings.segments.embedding_threshold, settings.segments.margin
     results = []
-    for proto, segment in zip(segment_protos, segments, strict=True):
-        score = cosine(vectors[text], vectors[proto.text])
-        embedding_vote = score >= settings.segments.embedding_threshold
-        judge_vote = None if answer is None else segment.id in valid
-        final, reason = decide_segment(embedding_vote, judge_vote, call_problem)
+    for score, segment in zip(scores, segments, strict=True):
+        embedding_vote = score >= threshold and score >= best - margin
+        if answer is None:
+            judge_vote, problem = None, call_problem
+        elif segment.id in valid:
+            judge_vote, problem = True, None
+        elif segment.id in rejected:  # a "yes" without valid evidence is not a "no"
+            judge_vote, problem = None, rejected[segment.id]
+        else:
+            judge_vote, problem = False, None
+        final, reason = decide_segment(embedding_vote, judge_vote, problem)
         record: dict[str, object] = {
             "cache_key": cache_key,
             "evidence": valid.get(segment.id),
             "problems": problems,
             "call_problem": call_problem,
+            "best_segment_score": str(best),
         }
         results.append(
             _Segment(segment.id, score, embedding_vote, judge_vote, record, final, reason)

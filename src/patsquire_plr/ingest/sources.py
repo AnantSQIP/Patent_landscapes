@@ -37,6 +37,11 @@ class Fetched(_Frozen):
     content_type: str | None = None
     retrieved_at: datetime | None = None
     detail: str | None = None
+    kind_fallback: bool = Field(
+        default=False,
+        description="the requested kind code was not found, so the number was looked up without "
+        "it; the served kind may differ from the requested one",
+    )
 
 
 class Normalized(_Frozen):

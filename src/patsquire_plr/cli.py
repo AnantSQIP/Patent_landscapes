@@ -24,6 +24,7 @@ from patsquire_plr.gateway.health import check_models
 from patsquire_plr.gateway.secrets import SecretResolver
 from patsquire_plr.gateway.store import PostgresCallStore
 from patsquire_plr.health import default_checks, run_checks
+from patsquire_plr.ingest.folder import FolderError, scan_folder
 from patsquire_plr.ingest.rawstore import RawStore
 from patsquire_plr.ingest.runner import (
     BatchBusyError,
@@ -276,7 +277,11 @@ def models_health(
 
 
 def _run_batch(
-    settings: Settings, source_id: str, batch_id: uuid.UUID | None, keys: list[str]
+    settings: Settings,
+    source_id: str,
+    batch_id: uuid.UUID | None,
+    keys: list[str],
+    provenance: dict[str, object] | None = None,
 ) -> None:
     if source_id not in settings.data_sources:
         typer.echo(
@@ -287,7 +292,7 @@ def _run_batch(
     source = build_source(source_id, settings.data_sources[source_id])
     engine = create_db_engine(settings.database)
     try:
-        batch = batch_id or start_lookup_batch(engine, source, keys)
+        batch = batch_id or start_lookup_batch(engine, source, keys, provenance=provenance)
         # Printed first so a crashed run can always be resumed with this ID.
         typer.echo(f"batch {batch} (resume with: plr ingest resume {batch})", err=True)
         report = run_lookup_batch(engine, RawStore(settings.object_storage), source, batch)
@@ -374,3 +379,31 @@ def dataset_report(
     typer.echo(
         render_report_markdown(report) if output == "markdown" else report.model_dump_json(indent=2)
     )
+
+
+@ingest_app.command("folder")
+def ingest_folder(
+    folder: Annotated[
+        Path, typer.Argument(help="Folder of patent PDFs named by publication number.")
+    ],
+    source: Annotated[
+        str, typer.Option(help="Configured data source to look records up in.")
+    ] = "google_patents",
+    scan_only: Annotated[bool, typer.Option(help="Only check the files; fetch nothing.")] = False,
+    config_file: ConfigFileOption = DEFAULT_CONFIG_FILE,
+    env_file: EnvFileOption = None,
+) -> None:
+    """Look up every patent in a folder of PDFs (numbers from file names), with file provenance."""
+    try:
+        scan = scan_folder(folder)
+    except FolderError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps({"folder_scan": scan.summary()}, indent=2), err=True)
+    if scan_only:
+        return
+    if not scan.keys:
+        typer.echo("no file in the folder is named by a publication number", err=True)
+        raise typer.Exit(code=1)
+    settings = _load(config_file, env_file)
+    _run_batch(settings, source, None, scan.keys, scan.provenance())

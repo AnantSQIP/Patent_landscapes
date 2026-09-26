@@ -81,7 +81,15 @@ def _dedupe(keys: Sequence[str]) -> tuple[list[str], int]:
     return list(first.values()), len(cleaned) - len(first)
 
 
-def start_lookup_batch(engine: Engine, source: LookupSource, keys: Sequence[str]) -> uuid.UUID:
+def start_lookup_batch(
+    engine: Engine,
+    source: LookupSource,
+    keys: Sequence[str],
+    *,
+    provenance: dict[str, object] | None = None,
+) -> uuid.UUID:
+    """Create a lookup batch. ``provenance`` describes where the request came from (e.g. the
+    user's files) and is stored with the batch."""
     requested, duplicates = _dedupe(keys)
     if not requested:
         raise ValueError("no keys to look up")
@@ -92,7 +100,10 @@ def start_lookup_batch(engine: Engine, source: LookupSource, keys: Sequence[str]
             adapter_version=source.info.adapter_version,
             source_api_version=source.info.source_api_version,
             query_id="lookup",
-            query_text=json.dumps({"keys": requested, "duplicates_ignored": duplicates}),
+            query_text=json.dumps(
+                {"keys": requested, "duplicates_ignored": duplicates}
+                | ({"provenance": provenance} if provenance is not None else {})
+            ),
             started_at=datetime.now(UTC),
             finished_at=None,
             reported_count=len(requested),
@@ -235,8 +246,12 @@ def _record(
         reasons += [
             f"source served {d.publication.text} for requested {fetched.requested_key}"
             for d, _ in normalized.documents
-            if not _matches_request(d, fetched.requested_key)
+            if not _matches_request(d, fetched.requested_key, kind_fallback=fetched.kind_fallback)
         ]
+        notes = list(normalized.warnings)
+        if fetched.kind_fallback:
+            served = ", ".join(d.publication.text for d, _ in normalized.documents)
+            notes.insert(0, f"{fetched.detail}; served {served}")
         duplicate_of = None if reasons else _already_stored(session, batch_id, normalized.documents)
         if duplicate_of is not None:
             session.add(
@@ -246,7 +261,7 @@ def _record(
                     outcome="duplicate",
                     raw_record_id=raw.id,
                     document_count=0,
-                    detail=f"same publication as requested key {duplicate_of}",
+                    detail="; ".join([f"same publication as requested key {duplicate_of}", *notes]),
                 )
             )
             return
@@ -266,17 +281,28 @@ def _record(
                 outcome="quarantined" if reasons else "stored",
                 raw_record_id=raw.id,
                 document_count=len(stored),
-                detail="; ".join(reasons or normalized.warnings) or None,
+                detail="; ".join(reasons + notes) or None,
             )
         )
 
 
-def _matches_request(document: PatentDocument, requested_key: str) -> bool:
-    """The served publication is the requested one (the kind only if one was requested)."""
+def _matches_request(
+    document: PatentDocument, requested_key: str, *, kind_fallback: bool = False
+) -> bool:
+    """The served publication is the requested one. The kind code must match when one was
+    requested. After a kind fallback (ADR 0009) only the kind's letter must match, e.g. E and
+    E1 or B1 and B2, never an application (A) for a grant (B)."""
     requested = normalize_publication_number(requested_key)
     served = document.publication
     same_number = (served.country, served.number) == (requested.country, requested.number)
-    return same_number and requested.kind in (None, served.kind)
+    if requested.kind is None or served.kind == requested.kind:
+        return same_number
+    return (
+        same_number
+        and kind_fallback
+        and served.kind is not None
+        and served.kind[0] == requested.kind[0]
+    )
 
 
 def _already_stored(

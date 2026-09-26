@@ -453,5 +453,101 @@ def test_resume_refuses_a_different_adapter_version(
 
     upgraded = _source(_serve(_pages()))
     upgraded._info = upgraded.info.model_copy(update={"adapter_version": "99"})
-    with pytest.raises(PlrError, match="created with adapter 3"):
+    with pytest.raises(PlrError, match="created with adapter 4"):
         run_lookup_batch(db_engine, RawStore(object_storage), upgraded, batch_id)
+
+
+def test_kind_fallback_is_stored_with_the_difference_recorded(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    page = _pages()["US10000000B2"]
+
+    def handler(request: httpx.Request) -> httpx.Response:  # requested "B1" exists only as B2
+        if request.url.path == "/patent/US10000000/":
+            return httpx.Response(200, content=page)
+        return httpx.Response(404)
+
+    source = _source(handler)
+    report = run_lookup_batch(
+        db_engine,
+        RawStore(object_storage),
+        source,
+        start_lookup_batch(db_engine, source, ["US10000000B1"]),
+    )
+
+    assert report.outcomes == {"stored": 1}
+    with Session(db_engine) as session:
+        detail = session.scalar(select(IngestItem.detail))
+    assert detail == "kind B1 not found; looked up US10000000; served US10000000B2"
+
+
+def _bare_number_only(page: bytes) -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/patent/US10000000/":
+            return httpx.Response(200, content=page)
+        return httpx.Response(404)
+
+    return handler
+
+
+def test_kind_fallback_never_stores_a_different_kind_letter(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    source = _source(_bare_number_only(_pages()["US10000000B2"]))  # the grant, for an "A1"
+    report = run_lookup_batch(
+        db_engine,
+        RawStore(object_storage),
+        source,
+        start_lookup_batch(db_engine, source, ["US10000000A1"]),
+    )
+
+    assert report.outcomes == {"quarantined": 1}
+    with Session(db_engine) as session:
+        detail = session.scalar(select(IngestItem.detail))
+    assert detail == (
+        "source served US10000000B2 for requested US10000000A1; "
+        "kind A1 not found; looked up US10000000; served US10000000B2"
+    )
+
+
+def test_kind_fallback_note_is_kept_on_a_duplicate(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    page = _pages()["US10000000B2"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path in ("/patent/US10000000/", "/patent/US10000000B2/"):
+            return httpx.Response(200, content=page)
+        return httpx.Response(404)
+
+    source = _source(handler)
+    report = run_lookup_batch(
+        db_engine,
+        RawStore(object_storage),
+        source,
+        start_lookup_batch(db_engine, source, ["US10000000B2", "US10000000B1"]),
+    )
+
+    assert report.outcomes == {"stored": 1, "duplicate": 1}
+    with Session(db_engine) as session:
+        detail = session.scalar(
+            select(IngestItem.detail).where(IngestItem.requested_key == "US10000000B1")
+        )
+    assert detail == (
+        "same publication as requested key US10000000B2; "
+        "kind B1 not found; looked up US10000000; served US10000000B2"
+    )
+
+
+def test_batch_provenance_is_stored_with_the_query(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    source = _source(_serve(_pages()))
+    provenance: dict[str, object] = {"type": "user_folder", "folder": "/data", "files": []}
+    batch_id = start_lookup_batch(db_engine, source, ["US10000000B2"], provenance=provenance)
+
+    with Session(db_engine) as session:
+        batch = session.get(IngestBatch, batch_id)
+        assert batch is not None
+        assert batch.query_text is not None
+        assert json.loads(batch.query_text)["provenance"] == provenance

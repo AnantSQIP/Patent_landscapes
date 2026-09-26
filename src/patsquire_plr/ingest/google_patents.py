@@ -49,8 +49,9 @@ from patsquire_plr.domain.patent import (
 from patsquire_plr.ingest.sources import Fetched, Normalized, SourceInfo
 from patsquire_plr.ratelimit import RateLimiter
 
-# 2: family members captured; 3: unparseable list entries mark only that field
-ADAPTER_VERSION = "3"
+# 2: family members captured; 3: unparseable list entries mark only that field;
+# 4: a kind code that is not found is looked up once without it (ADR 0009)
+ADAPTER_VERSION = "4"
 SOURCE_API_VERSION = "patents.google.com patent page, schema.org microdata (verified 2026-09-25)"
 HTTP_OK = 200
 HTTP_NOT_FOUND = 404
@@ -202,11 +203,25 @@ class GooglePatentsPageSource:
     def fetch(self, keys: Sequence[str]) -> Iterator[Fetched]:
         for key in keys:
             try:
-                number = normalize_publication_number(key).text
+                publication = normalize_publication_number(key)
             except NormalizationError as exc:
                 yield Fetched(requested_key=key, status="invalid_request", detail=str(exc))
                 continue
-            yield self._fetch_one(key, f"{self._settings.base_url}/patent/{number}/")
+            fetched = self._fetch_one(key, f"{self._settings.base_url}/patent/{publication.text}/")
+            if fetched.status == "not_found" and publication.kind is not None:
+                fetched = self._fetch_without_kind(key, publication)
+            yield fetched
+
+    def _fetch_without_kind(self, key: str, publication: PublicationNumber) -> Fetched:
+        """Kind codes are written differently in places (e.g. a reissue filed as "E" that
+        Google lists as "E1"), so the bare number is tried once. The runner accepts the served
+        document only if its kind has the same letter as the requested one (ADR 0009)."""
+        bare = f"{publication.country}{publication.number}"
+        note = f"kind {publication.kind} not found; looked up {bare}"
+        retry = self._fetch_one(key, f"{self._settings.base_url}/patent/{bare}/")
+        if retry.status == "ok":
+            return retry.model_copy(update={"kind_fallback": True, "detail": note})
+        return retry.model_copy(update={"detail": f"{note}: {retry.detail}"})
 
     def _fetch_one(self, key: str, url: str) -> Fetched:
         detail = ""

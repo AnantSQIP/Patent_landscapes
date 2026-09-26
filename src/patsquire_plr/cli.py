@@ -9,7 +9,16 @@ from typing import Annotated
 
 import typer
 
-from patsquire_plr.config import Settings, load_settings
+from patsquire_plr import cli_landscape
+from patsquire_plr.cli_common import (
+    DEFAULT_CONFIG_FILE,
+    ConfigFileOption,
+    EnvFileOption,
+)
+from patsquire_plr.cli_common import (
+    load_cli_settings as _load,
+)
+from patsquire_plr.config import Settings
 from patsquire_plr.db import migrate
 from patsquire_plr.db.datasets import (
     DatasetError,
@@ -18,7 +27,6 @@ from patsquire_plr.db.datasets import (
     report_dataset,
 )
 from patsquire_plr.db.engine import create_db_engine
-from patsquire_plr.errors import ConfigError
 from patsquire_plr.gateway.gateway import ModelGateway
 from patsquire_plr.gateway.health import check_models
 from patsquire_plr.gateway.secrets import SecretResolver
@@ -33,7 +41,6 @@ from patsquire_plr.ingest.runner import (
     start_lookup_batch,
 )
 from patsquire_plr.ingest.sources import build_source
-from patsquire_plr.log import configure_logging
 from patsquire_plr.reference.extract import (
     ExtractionError,
     ReferenceExtract,
@@ -60,39 +67,11 @@ ingest_app = typer.Typer(no_args_is_help=True, help="Ingest patent records from 
 app.add_typer(ingest_app, name="ingest")
 dataset_app = typer.Typer(no_args_is_help=True, help="Build and review analysis datasets.")
 app.add_typer(dataset_app, name="dataset")
+cli_landscape.register(app)
 DEFAULT_ALIASES = Path("config/applicant_aliases.yaml")
 
 TemplateOption = Annotated[Path, typer.Option("--template", help="Template specification YAML.")]
 DEFAULT_TEMPLATE = Path("template/plr_template.yaml")
-
-ConfigFileOption = Annotated[
-    Path,
-    typer.Option(
-        "--config",
-        envvar="PLR_CONFIG_FILE",
-        help="YAML config file (non-secret settings).",
-    ),
-]
-EnvFileOption = Annotated[
-    Path | None,
-    typer.Option(
-        "--env-file",
-        envvar="PLR_ENV_FILE",
-        help="Dotenv file with secrets. Omit to read only the process environment.",
-    ),
-]
-
-DEFAULT_CONFIG_FILE = Path("config/settings.yaml")
-
-
-def _load(config_file: Path, env_file: Path | None) -> Settings:
-    try:
-        settings = load_settings(config_file, env_file=env_file)
-    except ConfigError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=2) from exc
-    configure_logging(settings.app.log_level)
-    return settings
 
 
 @app.command()

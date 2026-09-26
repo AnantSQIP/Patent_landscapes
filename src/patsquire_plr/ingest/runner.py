@@ -159,6 +159,27 @@ def run_lookup_batch(
             lock_conn.execute(select(func.pg_advisory_unlock(_lock_key(batch_id))))
 
 
+def batch_summary(engine: Engine, batch_id: uuid.UUID) -> BatchReport:
+    """The outcome counts of a batch as recorded, read-only (nothing is re-run or logged)."""
+    with Session(engine) as session:
+        batch = session.get(IngestBatch, batch_id)
+        if batch is None:
+            raise PlrError(f"ingest batch {batch_id} does not exist")
+        requested_info = json.loads(batch.query_text or "{}")
+        requested: list[str] = requested_info["keys"]
+        latest = _latest_outcomes(session, batch_id)
+        return BatchReport(
+            batch_id=batch_id,
+            source_id=batch.source_id,
+            status=batch.status,
+            requested=len(requested),
+            duplicates_ignored=int(requested_info.get("duplicates_ignored", 0)),
+            outcomes=dict(sorted(Counter(latest.get(k, "missing") for k in requested).items())),
+            documents_stored=int(batch.stored_count or 0),
+            failed_keys=tuple(k for k in requested if latest.get(k) == "failed"),
+        )
+
+
 def _lock_key(batch_id: uuid.UUID) -> int:
     return batch_id.int % (2**63)  # advisory locks take a signed 64-bit key
 

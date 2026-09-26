@@ -1,0 +1,154 @@
+G		PHYSICS
+G01		MEASURING; TESTING
+G01S		RADIO DIRECTION-FINDING; RADIO NAVIGATION; DETERMINING DISTANCE OR VELOCITY BY USE OF RADIO WAVES; LOCATING OR PRESENCE-DETECTING BY USE OF THE REFLECTION OR RERADIATION OF RADIO WAVES; ANALOGOUS ARRANGEMENTS USING OTHER WAVES
+G01S7/00	0	Details of systems according to groups G01S13/00, G01S15/00, G01S17/00
+G01S7/48	1	of systems according to group G01S17/00
+G01S7/483	2	Details of pulse systems
+G01S7/486	3	Receivers
+G01S7/4861	4	Circuits for detection, sampling, integration or read-out
+G01S7/4863	5	Detector arrays, e.g. charge-transfer gates
+G01S7/4865	4	Time delay measurement, e.g. time-of-flight measurement, time of arrival measurement or determining the exact position of a peak (peak detection in noise, signal conditioning G01S7/487)
+G01S7/491	2	Details of non-pulse systems
+G01S7/4912	3	Receivers
+G01S7/4913	4	Circuits for detection, sampling, integration or read-out
+G01S7/4914	5	of detector arrays, e.g. charge-transfer gates
+G01S7/4917	4	{superposing optical signals in a photodetector, e.g. optical heterodyne detection}
+G01S13/00	0	Systems using the reflection or reradiation of radio waves, e.g. radar systems; Analogous systems using reflection or reradiation of waves whose nature or wavelength is irrelevant or unspecified
+G01S13/88	1	Radar or analogous systems specially adapted for specific applications (electromagnetic prospecting or detecting of objects, e.g. near-field detection, G01V3/00)
+G01S13/89	2	for mapping or imaging
+G01S17/00	0	Systems using the reflection or reradiation of electromagnetic waves other than radio waves, e.g. lidar systems
+G01S17/88	1	Lidar systems specially adapted for specific applications
+G01S17/89	2	for mapping or imaging
+G01S17/894	3	Three-dimensional [3D] imaging with simultaneous measurement of time-of-flight at a two-dimensional [2D] array of receiver pixels, e.g. time-of-flight cameras or flash lidar
+G02		OPTICS
+G02B		OPTICAL ELEMENTS, SYSTEMS OR APPARATUS
+G02B27/00	0	Optical systems or apparatus not provided for by any of the groups G02B1/00 - G02B26/00, G02B30/00
+G02B27/58	1	Optics for apodization or superresolution; Optical synthetic aperture systems
+G06		COMPUTING OR CALCULATING; COUNTING
+G06F		ELECTRIC DIGITAL DATA PROCESSING (computer systems based on specific computational models G06N)
+G06F40/00	0	Handling natural language data (speech analysis or synthesis, speech recognition G10L)
+G06F40/10	1	Text processing (natural language analysis G06F40/20; semantic analysis G06F40/30; processing or translation of natural language G06F40/40)
+G06F40/103	2	Formatting, i.e. changing of presentation of documents (automatic justification G06F40/189; automatic line break hyphenation G06F40/191)
+G06F40/106	3	Display of layout of documents; Previewing
+G06F40/109	3	Font handling; Temporal or kinetic typography
+G06F40/111	3	Mathematical or scientific formatting; Subscripts; Superscripts
+G06F40/114	3	Pagination
+G06F40/117	3	Tagging; Marking up (details of markup languages G06F40/143); Designating a block; Setting of attributes (style sheets, e.g. eXtensible Stylesheet Language Transformation [XSLT], G06F40/154)
+G06F40/12	2	Use of codes for handling textual entities
+G06F40/123	3	Storage facilities
+G06F40/126	3	Character encoding
+G06F40/129	4	Handling non-Latin characters, e.g. kana-to-kanji conversion
+G06F40/131	3	Fragmentation of text files, e.g. creating reusable text-blocks; Linking to fragments, e.g. using XInclude; Namespaces
+G06F40/134	3	Hyperlinking
+G06F40/137	3	Hierarchical processing, e.g. outlines
+G06F40/14	3	Tree-structured documents (parsing G06F40/205; validation G06F40/226)
+G06F40/143	4	Markup, e.g. Standard Generalized Markup Language [SGML] or Document Type Definition [DTD]
+G06F40/146	4	Coding or compression of tree-structured data
+G06F40/149	3	Adaptation of the text data for streaming purposes, e.g. Efficient XML Interchange [EXI] format
+G06F40/151	3	Transformation
+G06F40/154	4	Tree transformation for tree-structured or markup documents, e.g. XSLT, XSL-FO or stylesheets
+G06F40/157	4	using dictionaries or tables
+G06F40/16	4	Automatic learning of transformation rules, e.g. from examples
+G06F40/163	3	Handling of whitespace
+G06F40/166	2	Editing, e.g. inserting or deleting
+G06F40/169	3	Annotation, e.g. comment data or footnotes
+G06F40/171	3	by use of digital ink
+G06F40/174	3	Form filling; Merging
+G06F40/177	3	of tables; using ruled lines
+G06F40/18	4	of spreadsheets (form-filling G06F40/174)
+G06F40/183	3	Tabulation, i.e. one-dimensional [1D] positioning
+G06F40/186	3	Templates
+G06F40/189	2	Automatic justification
+G06F40/191	2	Automatic line break hyphenation
+G06F40/194	2	Calculation of difference between files
+G06F40/197	2	Version control (for software G06F8/71)
+G06F40/20	1	Natural language analysis (semantic analysis of natural language G06F40/30)
+G06F40/205	2	Parsing
+G06F40/211	3	Syntactic parsing, e.g. based on context-free grammar [CFG] or unification grammars
+G06F40/216	3	using statistical methods
+G06F40/221	3	Parsing markup language streams (streaming G06F40/149)
+G06F40/226	3	Validation
+G06F40/232	2	Orthographic correction, e.g. spell checking or vowelisation
+G06F40/237	2	Lexical tools
+G06F40/242	3	Dictionaries
+G06F40/247	3	Thesauruses; Synonyms
+G06F40/253	2	Grammatical analysis; Style critique
+G06F40/258	2	Heading extraction; Automatic titling; Numbering
+G06F40/263	2	Language identification
+G06F40/268	2	Morphological analysis
+G06F40/274	2	Converting codes to words; Guess-ahead of partial word inputs
+G06F40/279	2	Recognition of textual entities
+G06F40/284	3	Lexical analysis, e.g. tokenisation or collocates
+G06F40/289	3	Phrasal analysis, e.g. finite state techniques or chunking
+G06F40/295	4	Named entity recognition
+G06F40/30	1	Semantic analysis
+G06F40/35	2	Discourse or dialogue representation
+G06F40/40	1	Processing or translation of natural language (natural language analysis G06F40/20; semantic analysis G06F40/30)
+G06F40/42	2	Data-driven translation
+G06F40/44	3	Statistical methods, e.g. probability models
+G06F40/45	3	Example-based machine translation; Alignment
+G06F40/47	3	Machine-assisted translation, e.g. using translation memory
+G06F40/49	3	using very large corpora, e.g. the web
+G06F40/51	2	Translation evaluation
+G06F40/53	2	Processing of non-Latin text (kana-to-kanji conversion G06F40/129; vowelisation G06F40/232)
+G06F40/55	2	Rule-based translation
+G06F40/56	3	Natural language generation
+G06F40/58	2	Use of machine translation, e.g. for multi-lingual retrieval, for server-side translation for client devices or for real-time translation
+G06N		COMPUTING ARRANGEMENTS BASED ON SPECIFIC COMPUTATIONAL MODELS
+G06N3/00	0	Computing arrangements based on biological models
+G06N3/002	1	{Biomolecular computers, i.e. using biomolecules, proteins, cells (using DNA G06N3/123; using neurons G06N3/061)}
+G06N3/004	1	Artificial life, i.e. computing arrangements simulating life
+G06N3/006	2	based on simulated virtual individual or collective life forms, e.g. social simulations or particle swarm optimisation [PSO]
+G06N3/008	2	based on physical entities controlled by simulated intelligence so as to replicate intelligent life forms, e.g. based on robots replicating pets or humans in their appearance or behaviour
+G06N3/02	1	Neural networks
+G06N3/04	2	Architecture, e.g. interconnection topology
+G06N3/0409	3	{Adaptive resonance theory [ART] networks}
+G06N3/0418	3	{using chaos or fractal principles}
+G06N3/042	3	Knowledge-based neural networks; Logical representations of neural networks
+G06N3/043	3	based on fuzzy logic, fuzzy membership or fuzzy inference, e.g. adaptive neuro-fuzzy inference systems [ANFIS]
+G06N3/044	3	Recurrent networks, e.g. Hopfield networks
+G06N3/0442	4	characterised by memory or gating, e.g. long short-term memory [LSTM] or gated recurrent units [GRU]
+G06N3/045	3	Combinations of networks
+G06N3/0455	4	Auto-encoder networks; Encoder-decoder networks
+G06N3/0463	3	{Neocognitrons}
+G06N3/0464	3	Convolutional networks [CNN, ConvNet]
+G06N3/047	3	Probabilistic or stochastic networks
+G06N3/0475	3	Generative networks
+G06N3/048	3	Activation functions
+G06N3/049	3	Temporal neural networks, e.g. delay elements, oscillating neurons or pulsed inputs
+G06N3/0495	3	Quantised networks; Sparse networks; Compressed networks
+G06N3/0499	3	Feedforward networks
+G06N3/06	2	Physical realisation, i.e. hardware implementation of neural networks, neurons or parts of neurons
+G06N3/061	3	{using biological neurons, e.g. biological neurons connected to an integrated circuit}
+G06N3/063	3	using electronic means
+G06N3/065	4	Analogue means
+G06N3/067	3	using optical means
+G06N3/0675	4	{using electro-optical, acousto-optical or opto-electronic means}
+G06N3/08	2	Learning methods
+G06N3/082	3	modifying the architecture, e.g. adding, deleting or silencing nodes or connections
+G06N3/084	3	Backpropagation, e.g. using gradient descent
+G06N3/086	3	using evolutionary algorithms, e.g. genetic algorithms or genetic programming
+G06N3/088	3	Non-supervised learning, e.g. competitive learning
+G06N3/0895	3	Weakly supervised learning, e.g. semi-supervised or self-supervised learning
+G06N3/09	3	Supervised learning
+G06N3/091	3	Active learning
+G06N3/092	3	Reinforcement learning
+G06N3/094	3	Adversarial learning
+G06N3/096	3	Transfer learning
+G06N3/098	3	Distributed learning, e.g. federated learning
+G06N3/0985	3	Hyperparameter optimisation; Meta-learning; Learning-to-learn
+G06N3/10	2	Interfaces, programming languages or software development kits, e.g. for simulating neural networks
+G06N3/105	3	{Shells for specifying net layout}
+G06N3/12	1	using genetic models
+G06N3/123	2	DNA computing
+G06N3/126	2	Evolutionary algorithms, e.g. genetic algorithms or genetic programming
+G10		MUSICAL INSTRUMENTS; ACOUSTICS
+G10L		SPEECH ANALYSIS TECHNIQUES OR SPEECH SYNTHESIS; SPEECH RECOGNITION; SPEECH OR VOICE PROCESSING TECHNIQUES; SPEECH OR AUDIO CODING OR DECODING
+G10L15/00	0	Speech recognition (G10L17/00 takes precedence)
+G10L15/08	1	Speech classification or search
+G10L15/18	2	using natural language modelling
+G10L15/1807	3	{using prosody or stress}
+G10L15/1815	3	{Semantic context, e.g. disambiguation of the recognition hypotheses based on word meaning}
+G10L15/1822	3	{Parsing for meaning understanding}
+G10L15/183	3	using context dependencies, e.g. language models
+G10L15/187	4	Phonemic context, e.g. pronunciation rules, phonotactical constraints or phoneme n-grams

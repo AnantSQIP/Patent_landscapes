@@ -61,13 +61,27 @@ def _pages() -> dict[str, bytes]:
     }
 
 
+class _SimulatedTime:
+    """TEST-ONLY clock: sleeping advances it instantly, so rate limits cost no real time."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
 def _source(handler: Callable[[httpx.Request], httpx.Response]) -> GooglePatentsPageSource:
+    time = _SimulatedTime()
     return GooglePatentsPageSource(
         "google_patents",
         SETTINGS,
         client=httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True),
-        clock=lambda: 0.0,
-        sleep=lambda _: None,
+        clock=time.clock,
+        sleep=time.sleep,
     )
 
 

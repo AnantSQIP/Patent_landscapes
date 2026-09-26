@@ -394,7 +394,6 @@ def ingest_folder(
     env_file: EnvFileOption = None,
 ) -> None:
     """Look up every patent in a folder of PDFs (numbers from file names), with file provenance."""
-    settings = _load(config_file, env_file)
     try:
         scan = scan_folder(folder)
     except FolderError as exc:
@@ -406,9 +405,5 @@ def ingest_folder(
     if not scan.keys:
         typer.echo("no file in the folder is named by a publication number", err=True)
         raise typer.Exit(code=1)
-    provenance: dict[str, object] = {
-        "type": "user_folder",
-        "folder": scan.folder,
-        "files": [f.model_dump() for f in scan.files],
-    }
-    _run_batch(settings, source, None, scan.keys, provenance)
+    settings = _load(config_file, env_file)
+    _run_batch(settings, source, None, scan.keys, scan.provenance())

@@ -11,7 +11,7 @@ from fpdf import FPDF
 from typer.testing import CliRunner
 
 from patsquire_plr.cli import app
-from patsquire_plr.ingest.folder import FolderError, scan_folder
+from patsquire_plr.ingest.folder import FolderError, _number_in_text, scan_folder
 from tests.support import WriteConfig, base_config
 
 
@@ -84,3 +84,47 @@ def test_cli_scan_only_fetches_nothing(tmp_path: Path, write_config: WriteConfig
     )
     assert result.exit_code == 0, result.output
     assert json.loads(result.stderr)["folder_scan"]["requestable"] == 1
+
+
+@pytest.mark.parametrize(
+    ("number", "text", "found"),
+    [
+        ("10521786", "(10) Patent No.: US 10,521,786 B2", True),
+        ("RE48951", "(45) Reissued Patent: Re. 48,951", True),
+        ("D456789", "Des. 456,789", True),
+        ("10521786", "US 110,521,786 B2", False),  # inside a longer number
+        ("521786", "US 10,521,786 B2", False),
+        ("20200123456", "Pub. No.: US 2020/0123456 A1", True),
+    ],
+)
+def test_number_must_appear_as_a_whole_number(number: str, text: str, found: bool) -> None:
+    assert _number_in_text(number, text) is found
+
+
+def test_scan_records_the_absolute_folder_and_file_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pdf(tmp_path / "US10521786B2.pdf", None)
+    monkeypatch.chdir(tmp_path)
+
+    provenance = scan_folder(Path()).provenance()
+
+    assert provenance["type"] == "user_folder"
+    assert provenance["folder"] == str(tmp_path.resolve())
+    files = provenance["files"]
+    assert isinstance(files, list)
+    [record] = files
+    assert record["name"] == "US10521786B2.pdf"
+    assert (
+        record["sha256"] == hashlib.sha256((tmp_path / "US10521786B2.pdf").read_bytes()).hexdigest()
+    )
+
+
+def test_unreadable_file_is_a_folder_error(tmp_path: Path) -> None:
+    path = _pdf(tmp_path / "US1B1.pdf", None)
+    path.chmod(0)
+    try:
+        with pytest.raises(FolderError, match=r"US1B1\.pdf: not a readable PDF"):
+            scan_folder(tmp_path)
+    finally:
+        path.chmod(0o644)

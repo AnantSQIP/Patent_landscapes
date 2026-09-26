@@ -311,7 +311,7 @@ def test_source_identifies_its_format_version() -> None:
     assert (info.source_id, info.source_type, info.adapter_version) == (
         "google_patents",
         "google_patents_page",
-        "3",
+        "4",
     )
     assert info.source_api_version == SOURCE_API_VERSION
 
@@ -427,3 +427,15 @@ def test_no_fallback_when_no_kind_was_requested() -> None:
     [result] = _source(httpx.MockTransport(handler)).fetch(["US10000000"])
     assert result.status == "not_found"
     assert calls == ["/patent/US10000000/"]
+
+
+@pytest.mark.parametrize(("bare_status", "status"), [(404, "not_found"), (503, "failed")])
+def test_an_unsuccessful_fallback_keeps_its_own_outcome(bare_status: int, status: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(bare_status if request.url.path == "/patent/US10000000/" else 404)
+
+    [result] = _source(httpx.MockTransport(handler)).fetch(["US10000000B1"])
+    assert result.status == status  # a failed retry stays resumable, never "not_found"
+    assert result.kind_fallback is False
+    assert result.detail is not None
+    assert result.detail.startswith("kind B1 not found; looked up US10000000: ")

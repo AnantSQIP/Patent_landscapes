@@ -246,12 +246,12 @@ def _record(
         reasons += [
             f"source served {d.publication.text} for requested {fetched.requested_key}"
             for d, _ in normalized.documents
-            if not _matches_request(d, fetched.requested_key, ignore_kind=fetched.kind_fallback)
+            if not _matches_request(d, fetched.requested_key, kind_fallback=fetched.kind_fallback)
         ]
         notes = list(normalized.warnings)
         if fetched.kind_fallback:
             served = ", ".join(d.publication.text for d, _ in normalized.documents)
-            notes.insert(0, f"{fetched.detail}; stored {served}")
+            notes.insert(0, f"{fetched.detail}; served {served}")
         duplicate_of = None if reasons else _already_stored(session, batch_id, normalized.documents)
         if duplicate_of is not None:
             session.add(
@@ -261,7 +261,7 @@ def _record(
                     outcome="duplicate",
                     raw_record_id=raw.id,
                     document_count=0,
-                    detail=f"same publication as requested key {duplicate_of}",
+                    detail="; ".join([f"same publication as requested key {duplicate_of}", *notes]),
                 )
             )
             return
@@ -281,20 +281,28 @@ def _record(
                 outcome="quarantined" if reasons else "stored",
                 raw_record_id=raw.id,
                 document_count=len(stored),
-                detail="; ".join(reasons or notes) or None,
+                detail="; ".join(reasons + notes) or None,
             )
         )
 
 
 def _matches_request(
-    document: PatentDocument, requested_key: str, *, ignore_kind: bool = False
+    document: PatentDocument, requested_key: str, *, kind_fallback: bool = False
 ) -> bool:
     """The served publication is the requested one. The kind code must match when one was
-    requested, unless the source had to look the number up without it (recorded)."""
+    requested. After a kind fallback (ADR 0009) only the kind's letter must match, e.g. E and
+    E1 or B1 and B2, never an application (A) for a grant (B)."""
     requested = normalize_publication_number(requested_key)
     served = document.publication
     same_number = (served.country, served.number) == (requested.country, requested.number)
-    return same_number and (ignore_kind or requested.kind in (None, served.kind))
+    if requested.kind is None or served.kind == requested.kind:
+        return same_number
+    return (
+        same_number
+        and kind_fallback
+        and served.kind is not None
+        and served.kind[0] == requested.kind[0]
+    )
 
 
 def _already_stored(

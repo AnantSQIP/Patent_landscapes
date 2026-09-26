@@ -19,17 +19,24 @@ scope. The PDFs therefore cannot be the data source themselves.
   traces back to the exact file that asked for it.
 * **Checks before fetching:**
   * a file stem that is not a publication number is reported, not guessed;
-  * where a PDF has a text layer, the first two pages are checked for the number (digits
-    only, separators ignored);
+  * where a PDF has a text layer, the first two pages must contain the number's digits as
+    a whole number (digit-group separators such as "10,521,786" are ignored);
   * a mismatch is reported in the scan summary.
 
-  `--scan-only` prints this summary and fetches nothing. A missing folder, an empty
-  folder and an unreadable PDF are errors.
-* **Kind-code fallback:** if a number with a kind code is not found, the adapter retries
-  once with the bare country and number (Google lists some reissues as `E1`, not `E`).
-  The stored document keeps the publication the source actually served, and the item's
-  detail says what was requested and what was stored. Matching ignores only the kind in
-  this case.
+  This check confirms that the number appears on the first pages, not where. A cover page
+  listing cited patents can still let a misnamed file pass. `--scan-only` prints the summary
+  and fetches nothing, without needing database settings. A missing folder, an empty folder
+  and an unreadable file are errors. The folder is recorded as an absolute path.
+* **Kind-code fallback** (Google Patents adapter version 4): if a number with a kind code is
+  not found, the adapter retries once with the bare country and number. Google lists some
+  reissues as `E1`, not `E`.
+  * The served document is accepted only if its kind has the **same letter** as the
+    requested one (E and E1, B1 and B2). An application (A) is never stored for a
+    requested grant (B), or the other way round; that item is quarantined.
+  * The item's detail always records what was requested, what was looked up and what was
+    served, whatever the outcome (stored, duplicate or quarantined).
+  * A retry that fails (e.g. HTTP 503) leaves the item `failed`, so it can be resumed. It
+    is never recorded as `not_found`.
 
 ## Consequences
 * Patents too recent for the source are reported as `not_found` and can be looked up again

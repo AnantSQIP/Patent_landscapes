@@ -9,8 +9,15 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
   source supplies the records. Each file's name, size and sha256 are recorded as batch
   provenance. Numbers are cross-checked against the PDF text layer where one exists.
   `--scan-only` only checks the files. See ADR 0009.
-- Google Patents adapter: when a number's kind code is not found, it retries once with the
-  bare number (e.g. reissue `E` listed as `E1`).
+- Google Patents adapter v4: when a number's kind code is not found, it retries once with
+  the bare number (e.g. reissue `E` listed as `E1`). The served document is kept only if its
+  kind letter matches the request. A failed retry stays `failed`, so it can be resumed.
+- **Review fixes:**
+  * whole-number text check;
+  * absolute folder path in provenance;
+  * unreadable files are reported;
+  * `--scan-only` needs no settings;
+  * `pypdfium2` is declared as a dependency.
 
 ### Added: Phase 4, cleaning, patent families, applicant names
 - Stated family members captured from sources (Google "Also Published As"; migration 0005,

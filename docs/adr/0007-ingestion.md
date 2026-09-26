@@ -13,7 +13,8 @@
   * Keys are de-duplicated on the normalised publication number, so spelling variants
     count once.
   * The served publication must match the request (the kind code only if one was
-    requested); otherwise the item is quarantined.
+    requested); otherwise the item is quarantined. The one exception is the kind-code
+    fallback of ADR 0009: after it, only the kind's letter must match (E and E1, B1 and B2).
   * A key that resolves to a publication already stored in the batch (e.g. `EP3123456` and
     `EP3123456A1`) is recorded as `duplicate` and no second document is stored.
   * A session advisory lock stops two runs of one batch from interleaving.

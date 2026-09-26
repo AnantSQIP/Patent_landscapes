@@ -624,3 +624,47 @@ def test_replay_needs_fetched_pages(
         start_replay_batch(db_engine, RawStore(object_storage), source, batch)
     with pytest.raises(PlrError, match="does not exist"):
         start_replay_batch(db_engine, RawStore(object_storage), source, uuid.uuid4())
+
+
+def test_replay_infers_a_kind_fallback_the_original_batch_did_not_note(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    from patsquire_plr.ingest.replay import start_replay_batch  # noqa: PLC0415
+
+    page = _pages()["US10000000B2"]
+    source = _source(lambda request: httpx.Response(200, content=page))
+    batch = start_lookup_batch(db_engine, source, ["US10000000B2"])
+    run_lookup_batch(db_engine, RawStore(object_storage), source, batch)
+    # Pretend an old batch stored this page for "US10000000B1" with no fallback note.
+    with Session(db_engine) as session, session.begin():
+        old = start_lookup_batch(db_engine, source, ["US10000000B1"])
+        raw = session.scalars(select(RawRecord).where(RawRecord.batch_id == batch)).one()
+        copy = RawRecord(
+            batch_id=old,
+            source_record_key="US10000000B1",
+            object_key=raw.object_key,
+            sha256=raw.sha256,
+            content_type=raw.content_type,
+            byte_size=raw.byte_size,
+            retrieved_at=raw.retrieved_at,
+        )
+        session.add(copy)
+        session.flush()
+        session.add(
+            IngestItem(
+                batch_id=old,
+                requested_key="US10000000B1",
+                outcome="stored",
+                raw_record_id=copy.id,
+                document_count=0,
+                detail=None,
+            )
+        )
+
+    replay, replay_source = start_replay_batch(db_engine, RawStore(object_storage), source, old)
+    report = run_lookup_batch(db_engine, RawStore(object_storage), replay_source, replay)
+
+    assert report.outcomes == {"stored": 1}
+    with Session(db_engine) as session:
+        detail = session.scalar(select(IngestItem.detail).where(IngestItem.batch_id == replay))
+    assert detail == "kind B1 not found; looked up US10000000; served US10000000B2"

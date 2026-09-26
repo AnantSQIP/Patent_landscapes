@@ -26,6 +26,7 @@ from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
 from patsquire_plr.db.models import IngestBatch, IngestItem, RawRecord
+from patsquire_plr.domain.patent import normalize_publication_number
 from patsquire_plr.errors import PlrError
 from patsquire_plr.ingest.rawstore import RawStore
 from patsquire_plr.ingest.runner import FETCHED_OUTCOMES, start_lookup_batch
@@ -64,15 +65,38 @@ class StoredPageSource:
             page = self._pages.get(key)
             if page is None:
                 raise PlrError(f"{key}: no stored page to replay")
+            content = self._raw_store.get(page.object_key, page.sha256)
+            note = page.fallback_note or self._inferred_fallback(key, content, page.retrieved_at)
             yield Fetched(
                 requested_key=key,
                 status="ok",
-                content=self._raw_store.get(page.object_key, page.sha256),
+                content=content,
                 content_type=page.content_type,
                 retrieved_at=page.retrieved_at,
-                kind_fallback=page.fallback_note is not None,
-                detail=page.fallback_note,
+                kind_fallback=note is not None,
+                detail=note,
             )
+
+    def _inferred_fallback(self, key: str, content: bytes, retrieved_at: datetime) -> str | None:
+        """Batches from before the fallback note was recorded (adapter < 4 notes) say
+        nothing about it. A page requested with a kind code is served as exactly that kind,
+        so a stored page showing *another* kind of the same number can only have come from
+        the bare-number lookup; the adapter's note is reconstructed for it."""
+        requested = normalize_publication_number(key)
+        if requested.kind is None:
+            return None
+        normalized = self._adapter.normalize(
+            content, raw_record_id=uuid.UUID(int=0), retrieved_at=retrieved_at
+        )
+        for document, _ in normalized.documents:
+            served = document.publication
+            same_number = (served.country, served.number) == (requested.country, requested.number)
+            if same_number and served.kind != requested.kind:
+                return (
+                    f"kind {requested.kind} not found; looked up "
+                    f"{requested.country}{requested.number}"
+                )
+        return None
 
     def normalize(
         self, content: bytes, *, raw_record_id: uuid.UUID, retrieved_at: datetime

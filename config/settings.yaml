@@ -47,7 +47,7 @@ models:
     embedding:
       {backend: local_ollama, model: "all-minilm:22m", max_output_tokens: null, temperature: null, seed: null, max_schema_retries: 0, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
     bulk_classifier:
-      {backend: local_ollama, model: "qwen2.5:0.5b", max_output_tokens: 512, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
+      {backend: local_ollama, model: "qwen2.5:3b", max_output_tokens: 512, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
     reasoner:
       {backend: local_ollama, model: "qwen2.5:3b", max_output_tokens: 4096, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
     writer:

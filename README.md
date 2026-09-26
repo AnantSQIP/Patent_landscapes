@@ -65,6 +65,10 @@ Secrets are masked in `repr`, in `plr config show` and in logs. See
 | `plr queries generate VERSION_ID` | Generates the query set (EPO OPS CQL, Lens JSON, BigQuery SQL, local) from an approved taxonomy. |
 | `plr queries show` / `count` / `recall` / `approve` | Prints queries, counts them over stored batches, checks recall of confirmed patents, and approves the set. |
 | `plr discover citations QUERY_SET_ID` | Key-less discovery: follows citations from the seeds (approved query set required). Re-running resumes. |
+| `plr ingest renormalize BATCH_ID` | Re-reads a batch's stored pages with the current adapter into a new batch (nothing is fetched). |
+| `plr classify run --dataset D --query-set Q` | Relevance and segment classification of every family: embedding bands, a judge for borderline and sampled families, and two methods for segments. |
+| `plr classify report` / `review` / `evaluate RUN` | Summary; the human review queue (uncertain decisions with reasons); precision/recall/F1 with 95% intervals against the gold set (exits 1 if not publishable). |
+| `plr label export RUN --out F.csv` / `plr label import RUN F.csv --by NAME` | Gold-set labelling by people in Excel: a random sample out, labels back in. |
 
 ## Tests
 

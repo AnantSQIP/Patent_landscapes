@@ -4,6 +4,18 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added: Phase 6, relevance filtering and segment classification
+- Migration 0008 (append-only): classification runs, family texts, pgvector embeddings,
+  relevance and segment decisions, gold labels, evaluations.
+- **Relevance:** embedding bands with calibrated thresholds (0.50 / 0.35). Borderline
+  families, plus a fixed QA sample, go to the judge, which must quote its evidence from the
+  text. Disagreements become uncertain.
+- **Segments:** multi-label, assigned only when the embedding and the judge agree.
+- **Human review queue:** `plr classify review`.
+- **Gold set** in CSV/Excel and **evaluation** with Wilson 95% intervals. A run is
+  publishable only when the configured minimums are met and the review queue is empty.
+- ADR 0011.
+
 ### Added: Phase 5, scope, taxonomy and key strings
 - **Official CPC scheme:** the CPC Title List 2026.08 (254,314 entries) is stored
   hash-verified and parsed exactly. It supports checking codes, title search and the

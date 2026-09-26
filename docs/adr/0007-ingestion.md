@@ -34,6 +34,11 @@
   robots.txt allows `/patent/` pages. It uses the original-language page (no language
   suffix). Title, abstract and claims are stored only when the page marks them as the
   patent office's text:
+  * the office's text is `load-source="patent-office"`, or `load-source="docdb"` with
+    `source="national office"`. The DOCDB form is how about half of all abstracts are
+    delivered; it has been accepted since adapter version 5. It was checked over the 2,001
+    stored pages on 2026-09-26: abstracts come as docdb/national office (1,011) or
+    patent-office (984), and claims and descriptions as patent-office or WIPO-OCR;
   * text marked as OCR (`WIPO-OCR`) or as a machine translation is recorded as `unparseable`;
   * family IDs, priority claims and IPC codes are not on the page, so they are recorded as
     `not_provided_by_source`;
@@ -54,6 +59,15 @@
 * **Migration note:** downgrading below 0003 fails once any document has status `active`,
   because documents are append-only. That is intended: history is never rewritten to fit
   an older schema.
+
+## Re-normalising stored pages
+`plr ingest renormalize BATCH` re-reads a batch's stored pages with the current adapter
+into a new batch. Nothing is fetched.
+* The original retrieval times and raw objects are kept, and the batch reconciles as usual.
+* Keys that were never fetched are counted in the provenance, not replayed.
+* A kind fallback from before adapter 4 recorded it is inferred from the page: a page
+  requested with a kind code is served as exactly that kind, so another kind of the same
+  number can only come from the bare-number lookup.
 
 ## Not yet done
 * Search-capable sources (patent APIs, Google BigQuery) and local-file adapters (XML, CSV,

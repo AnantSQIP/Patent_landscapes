@@ -49,6 +49,17 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
   * the CPC title search reports terms it cannot use;
   * taxonomy import needs the base version (no lost edits), and a landscape's first
     version may be written by a person.
+- **Google adapter v5:** abstracts delivered from DOCDB by the national office are official
+  text. Before this, about half of all abstracts were recorded as unparseable (on the
+  owner's patents, 659 of 1,131).
+- **`plr ingest renormalize BATCH`:** rebuilds a batch from its stored pages with the
+  current adapter; nothing is fetched. After the fix, 1,130 of the 1,131 have an abstract;
+  the one without has none on its page.
+- **Final audit fixes:**
+  * hop-1 accounting;
+  * edits re-checked under the landscape lock;
+  * unknown codes in a queried main group decided;
+  * CPC search takes any iterable.
 - **LLM landscape inputs:** CPC research in `docs/research/llm_cpc_codes.md`, a scope with
   nine owner-confirmed patents, and a researched taxonomy (`examples/`).
 

@@ -46,19 +46,44 @@
   its reason.
 
 **Gold set**
-* People label a uniform random sample in CSV/Excel (`plr label export` / `import`). The
-  sample is seeded, skips families already labelled, and shows no system decisions.
-* A file with any invalid row is rejected whole.
+* Every file handed to people is recorded as a `label_export`, and imports must name their
+  export. There are two kinds:
+  * `plr label export` is a seeded, uniform random **sample**. These are the only labels
+    used to measure accuracy.
+  * `plr label review` is the **review queue**. These labels resolve uncertain decisions
+    and never enter the figures, since they are the hardest cases.
+* Neither file shows the system's decisions.
+* A "not relevant" label also marks every segment "no", so old segment labels cannot
+  outlive a correction.
+* Excel files separated by ";" or tab are read. A file that is not UTF-8 is rejected with
+  instructions. A file with any invalid row is rejected whole.
 * Labels belong to dataset families, so they survive new runs.
+* Each labeller's newest label counts. Labellers who disagree are reported and block
+  publication until reconciled.
 
 **Evaluation** (`plr classify evaluate`)
 * It reports precision, recall and F1, with Wilson 95% intervals, for relevance and for
   each segment.
 * `uncertain` counts as not found.
 * A run is **publishable** only if all of these hold:
-  * enough gold labels;
-  * precision, recall and segment F1 meet the configured minimums;
+  * enough sampled labels, and enough of them relevant;
+  * precision and recall meet their minimums. They are compared unrounded against the 95%
+    Wilson lower bound by default (`gate_on: lower_bound`), so a tiny sample cannot pass
+    by luck;
+  * enough sampled families have segment labels, and every segment with any hit or error
+    meets the minimum F1;
+  * no labeller conflicts;
   * no review item is open.
+
+**Failures**
+* A judge call whose output never validates is recorded against that family, with its
+  call key. If more than `max_judge_failure_rate` of the calls fail, the run stops and
+  nothing is stored: a broken model must not fill the review queue.
+* A failed segment call makes every segment of that family `uncertain`.
+* A quote must be at least 15 characters to count as evidence.
+
+**Embeddings** are stored per (backend, model, text), inserted once, so every stored score
+can be recomputed.
 
 **Atomicity**
 * A run and all its decisions are written in one transaction.
@@ -76,6 +101,9 @@ This is a calibration check, not a gold set. Accuracy is measured only against p
 labels.
 
 ## Consequences
+* **Memory:** a run holds all family vectors in memory, about 150 MB per 100,000 families
+  with 384 dimensions (as Python floats, about 1 GB). Landscapes of that size need chunked
+  scoring, which is planned when a real run needs it.
 * On a CPU, the local judge (qwen2.5 3B) takes seconds per family. Large landscapes need a
   GPU or a hosted model; the gateway makes that a configuration change.
 * Until someone labels a sample, every run is reported as not publishable. The

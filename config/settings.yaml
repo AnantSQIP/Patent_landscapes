@@ -88,10 +88,14 @@ classification:
     low_threshold: "0.3500"
     qa_sample_rate: "0.1000"
     min_judge_confidence: medium
+    max_judge_failure_rate: "0.2000"
   segments:
     embedding_threshold: "0.4500"
   evaluation:
     min_gold_labels: 100
+    min_gold_positives: 20
+    min_segment_labels: 20
+    gate_on: lower_bound         # the 95% lower bound must meet each minimum
     min_precision: "0.8000"
     min_recall: "0.8000"
     min_segment_f1: "0.7000"

@@ -250,7 +250,8 @@ class ModelGateway:
             )
         raise StructuredOutputError(
             f"role {role} ({role_cfg.backend}/{role_cfg.model}): output failed schema validation "
-            f"{role_cfg.max_schema_retries + 1} time(s); last error: {last_error}"
+            f"{role_cfg.max_schema_retries + 1} time(s); last error: {last_error}",
+            cache_key=key,
         )
 
     def embed(self, texts: list[str], *, use_cache: bool = True) -> EmbeddingResult:

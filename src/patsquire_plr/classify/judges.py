@@ -17,6 +17,8 @@ from patsquire_plr.landscape.taxonomy import SegmentSpec
 
 Confidence = Literal["low", "medium", "high"]
 CONFIDENCE_ORDER: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+# A quote must carry meaning: fragments such as "ing" or "the" occur in almost any text.
+MIN_EVIDENCE_CHARS = 15
 
 
 class _Strict(BaseModel):
@@ -99,8 +101,8 @@ def _normal(text: str) -> str:
 def evidence_problem(evidence: str, text: str) -> str | None:
     """Why the quoted evidence cannot be accepted, or None if it is in the text."""
     quote = _normal(evidence).strip(" .\"'")
-    if len(quote) < 3:  # noqa: PLR2004 - a quote needs at least a short word
-        return "no evidence quoted"
+    if len(quote) < MIN_EVIDENCE_CHARS:
+        return f"evidence quote is shorter than {MIN_EVIDENCE_CHARS} characters"
     if quote not in _normal(text):
         return f"evidence is not in the patent text: {evidence[:80]!r}"
     return None

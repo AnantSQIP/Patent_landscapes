@@ -78,6 +78,7 @@ APPEND_ONLY_TABLES: tuple[str, ...] = (
     "text_embedding",
     "relevance_decision",
     "segment_decision",
+    "label_export",
     "gold_label",
     "evaluation",
 )
@@ -755,10 +756,12 @@ class FamilyText(Base):
 
 
 class TextEmbedding(Base):
-    """APPEND-ONLY. One embedding per (model, text), reused across runs."""
+    """APPEND-ONLY. One embedding per (backend, model, text), reused across runs, so every
+    stored score can be recomputed from stored vectors."""
 
     __tablename__ = "text_embedding"
 
+    backend: Mapped[str] = mapped_column(primary_key=True)
     model: Mapped[str] = mapped_column(primary_key=True)
     text_sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
     dims: Mapped[int] = mapped_column(Integer)
@@ -806,9 +809,25 @@ class SegmentDecision(Base):
     reason: Mapped[str]
 
 
+class LabelExport(Base):
+    """APPEND-ONLY. A file of families handed to people for labelling. ``sample`` is a
+    seeded uniform random sample (the only labels used to measure accuracy); ``review`` is
+    the review queue (labels there resolve uncertain decisions)."""
+
+    __tablename__ = "label_export"
+    __table_args__ = (CheckConstraint("purpose IN ('sample', 'review')", name="purpose"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    created_at: Mapped[datetime] = _created_at()
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("classification_run.id"))
+    purpose: Mapped[str]
+    seed: Mapped[int | None] = mapped_column(Integer)
+    family_keys: Mapped[list[object]]
+
+
 class GoldLabel(Base):
-    """APPEND-ONLY. A person's label for a family (the gold set); the newest per labeller
-    and task counts."""
+    """APPEND-ONLY. A person's label for a family, from one export. Per labeller the newest
+    label per task counts; labellers who disagree must be reconciled before evaluation."""
 
     __tablename__ = "gold_label"
     __table_args__ = (
@@ -819,6 +838,7 @@ class GoldLabel(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     created_at: Mapped[datetime] = _created_at()
     dataset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dataset.id"))
+    export_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("label_export.id"))
     family_key: Mapped[str]
     task: Mapped[str]
     label: Mapped[bool] = mapped_column(Boolean)

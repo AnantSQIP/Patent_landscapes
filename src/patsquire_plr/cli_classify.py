@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from patsquire_plr.classify.evaluate import evaluate
-from patsquire_plr.classify.gold import export_sample, import_labels
+from patsquire_plr.classify.gold import export_review, export_sample, import_labels
 from patsquire_plr.classify.run import classify
 from patsquire_plr.cli_common import DEFAULT_CONFIG_FILE, ConfigFileOption, EnvFileOption
 from patsquire_plr.cli_landscape import session_of
@@ -59,7 +59,6 @@ def classify_run(
             dataset_id=dataset,
             query_set_id=query_set,
             settings=settings.classification,
-            embedding_model=settings.models.roles["embedding"].model,
             judge_model=settings.models.roles["bulk_classifier"].model,
             progress=lambda line: typer.echo(line, err=True),
         )
@@ -154,6 +153,22 @@ def label_export(
         "relevant ones fill 'segments' with segment ids separated by ';' (or 'none').",
         err=True,
     )
+
+
+@label_app.command("review")
+def label_review(
+    run_id: RunArgument,
+    *,
+    out: Annotated[Path, typer.Option(help="CSV file to write (opens in Excel).")],
+    config_file: ConfigFileOption = DEFAULT_CONFIG_FILE,
+    env_file: EnvFileOption = None,
+) -> None:
+    """Write the review queue (uncertain decisions) for a person to decide. These labels
+    resolve the queue; they are not used to measure accuracy."""
+    with session_of(config_file, env_file) as (_, engine):
+        text = export_review(engine, run_id)
+    out.write_text(text, encoding="utf-8")
+    typer.echo(f"wrote {text.count(chr(10)) - 1} families to review to {out}", err=True)
 
 
 @label_app.command("import")

@@ -20,7 +20,7 @@ from typer.testing import CliRunner
 
 from patsquire_plr.classification.store import load_cpc_title_list, open_cpc_scheme
 from patsquire_plr.classify.evaluate import evaluate
-from patsquire_plr.classify.gold import LabelError, export_sample, import_labels
+from patsquire_plr.classify.gold import LabelError, export_review, export_sample, import_labels
 from patsquire_plr.classify.judges import RelevanceJudgement, SegmentJudgement
 from patsquire_plr.classify.run import ClassificationError, classify
 from patsquire_plr.classify.texts import family_texts
@@ -38,6 +38,7 @@ from patsquire_plr.db.models import (
     SegmentDecision,
     TextEmbedding,
 )
+from patsquire_plr.gateway.errors import StructuredOutputError
 from patsquire_plr.gateway.gateway import EmbeddingResult, StructuredResult
 from patsquire_plr.gateway.prompts import PromptTemplate
 from patsquire_plr.ingest.rawstore import RawStore
@@ -63,10 +64,14 @@ SETTINGS = ClassificationSettings.model_validate(
             "low_threshold": "0.3500",
             "qa_sample_rate": "1",  # every confident family is also judged
             "min_judge_confidence": "medium",
+            "max_judge_failure_rate": "0.2000",
         },
         "segments": {"embedding_threshold": "0.4500"},
         "evaluation": {
             "min_gold_labels": 3,
+            "min_gold_positives": 1,
+            "min_segment_labels": 1,
+            "gate_on": "point",
             "min_precision": "0.8000",
             "min_recall": "0.8000",
             "min_segment_f1": "0.7000",
@@ -182,7 +187,6 @@ def _run(engine: Engine, dataset: uuid.UUID, query_set: uuid.UUID) -> uuid.UUID:
         dataset_id=dataset,
         query_set_id=query_set,
         settings=SETTINGS,
-        embedding_model="test-embedding",
         judge_model="test-judge",
     ).run_id
 
@@ -225,9 +229,9 @@ def test_a_run_decides_every_family_with_reasons(
     )
     assert segment.judge is not None
     assert segment.judge["problems"] == ["unknown segment ghost"]
-    assert {e.model for e in embeddings} == {"test-embedding"}
+    assert {(e.backend, e.model) for e in embeddings} == {("t", "t")}
 
-    rerun = _run(db_engine, dataset, query_set)  # embeddings are reused, not duplicated
+    rerun = _run(db_engine, dataset, query_set)  # stored embeddings are not written twice
     assert rerun != run_id
     with Session(db_engine) as session:
         assert len(session.scalars(select(TextEmbedding)).all()) == len(embeddings)
@@ -244,50 +248,150 @@ def test_family_texts_pick_the_representative_deterministically(
     assert all(t.text for t in texts)
 
 
+def _fill(export: str, answers: dict[str, tuple[str, str]], publications: dict[str, str]) -> str:
+    """A labelled copy of an exported CSV: answers by publication -> (relevant, segments)."""
+    rows = list(csv.DictReader(io.StringIO(export.removeprefix("\ufeff"))))
+    by_family = {publications[p]: a for p, a in answers.items()}
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=list(rows[0]))
+    writer.writeheader()
+    for row in rows:
+        relevant, segments = by_family.get(row["family_key"], ("", ""))
+        writer.writerow({**row, "relevant": relevant, "segments": segments})
+    return out.getvalue()
+
+
+def _publications(engine: Engine, run_id: uuid.UUID) -> dict[str, str]:
+    with Session(engine) as session:
+        return {
+            str(t.publication): t.family_key
+            for t in session.scalars(select(FamilyText).where(FamilyText.run_id == run_id))
+        }
+
+
+ANSWERS = {
+    "US20160266243A1": ("y", "ladar"),
+    "US5093563A": ("n", ""),
+    "EP3123456A1": ("n", ""),
+    "WO2020123456A1": ("n", ""),
+}
+
+
 def test_labels_and_evaluation(
     db_engine: Engine, object_storage: ObjectStorageSettings, tmp_path: Path
 ) -> None:
     dataset, query_set = _prepared(db_engine, object_storage)
     run_id = _run(db_engine, dataset, query_set)
+    publications = _publications(db_engine, run_id)
 
     exported = export_sample(db_engine, run_id, size=10, seed=1)
-    assert exported.startswith("﻿")
-    rows = list(csv.DictReader(io.StringIO(exported.removeprefix("﻿"))))
-    assert len(rows) == 4
-    assert {"relevant", "segments"} <= set(rows[0])
-
-    with Session(db_engine) as session:
-        texts = {t.publication: t.family_key for t in session.scalars(select(FamilyText))}
+    assert exported.startswith("\ufeff")
     labels = tmp_path / "labels.csv"
-    labels.write_text(
-        "family_key,relevant,segments\n"
-        f"{texts['US20160266243A1']},y,ladar\n"
-        f"{texts['US5093563A']},n,\n"
-        f"{texts['EP3123456A1']},n,\n"
-        f"{texts['WO2020123456A1']},n,\n",
-        encoding="utf-8",
-    )
+    labels.write_text(_fill(exported, ANSWERS, publications), encoding="utf-8")
     result = import_labels(db_engine, run_id, labels, labeller="Test Reviewer")
-    assert (result.families_labelled, result.labels_stored) == (4, 5)
-    assert export_sample(db_engine, run_id, size=10, seed=1).count("\n") == 1  # all labelled
+    assert (result.purpose, result.families_labelled, result.labels_stored) == ("sample", 4, 8)
+    assert export_sample(db_engine, run_id, size=10, seed=1).count("\n") == 1  # all sampled
 
     row = evaluate(db_engine, run_id, SETTINGS.evaluation)
     relevance = row.results["relevance"]
     assert isinstance(relevance, dict)
     assert (relevance["tp"], relevance["fp"], relevance["fn"], relevance["tn"]) == (1, 0, 0, 3)
-    assert row.publishable is True
-    assert row.problems == []
+    assert (row.publishable, row.problems) == (True, [])
 
     strict = EvaluationSettings.model_validate(
         {**SETTINGS.evaluation.model_dump(), "min_gold_labels": 100}
     )
     assert evaluate(db_engine, run_id, strict).problems == [
-        "only 4 relevance labels; at least 100 are needed"
+        "only 4 sampled relevance labels; at least 100 are needed"
     ]
-    bad = tmp_path / "bad.csv"
-    bad.write_text("family_key,relevant,segments\nnope,y,\n", encoding="utf-8")
-    with pytest.raises(LabelError, match="not in this run"):
-        import_labels(db_engine, run_id, bad, labeller="T")
+
+
+def test_review_labels_resolve_the_queue_but_never_count_as_accuracy(
+    db_engine: Engine, object_storage: ObjectStorageSettings, tmp_path: Path
+) -> None:
+    dataset, query_set = _prepared(db_engine, object_storage)
+    run_id = _run(db_engine, dataset, query_set)
+    publications = _publications(db_engine, run_id)
+
+    review = export_review(db_engine, run_id)
+    assert review.count("\n") == 2  # header + the one uncertain family
+    labels = tmp_path / "review.csv"
+    labels.write_text(_fill(review, {"EP3123456A1": ("n", "")}, publications), encoding="utf-8")
+    assert import_labels(db_engine, run_id, labels, labeller="Test Reviewer").purpose == "review"
+
+    row = evaluate(db_engine, run_id, SETTINGS.evaluation)
+    relevance = row.results["relevance"]
+    assert isinstance(relevance, dict)
+    assert relevance["tn"] == 0  # the review label is not a sampled label
+    assert "families still need a person's review" not in " ".join(str(p) for p in row.problems)
+    assert row.publishable is False  # no random sample yet
+
+
+def test_labellers_who_disagree_block_publication(
+    db_engine: Engine, object_storage: ObjectStorageSettings, tmp_path: Path
+) -> None:
+    dataset, query_set = _prepared(db_engine, object_storage)
+    run_id = _run(db_engine, dataset, query_set)
+    publications = _publications(db_engine, run_id)
+    exported = export_sample(db_engine, run_id, size=10, seed=1)
+    first, second = tmp_path / "a.csv", tmp_path / "b.csv"
+    first.write_text(_fill(exported, ANSWERS, publications), encoding="utf-8")
+    second.write_text(
+        _fill(exported, {**ANSWERS, "US5093563A": ("y", "none")}, publications), encoding="utf-8"
+    )
+    import_labels(db_engine, run_id, first, labeller="A")
+    import_labels(db_engine, run_id, second, labeller="B")
+
+    row = evaluate(db_engine, run_id, SETTINGS.evaluation)
+    assert "labels differ between labellers" in " ".join(str(p) for p in row.problems)
+    conflicts = row.results["labeller_conflicts"]
+    assert isinstance(conflicts, list)
+    assert [publications["US5093563A"], "relevance"] in conflicts
+
+
+def test_labels_must_come_from_an_export_of_this_run(
+    db_engine: Engine, object_storage: ObjectStorageSettings, tmp_path: Path
+) -> None:
+    dataset, query_set = _prepared(db_engine, object_storage)
+    run_id = _run(db_engine, dataset, query_set)
+    other_run = _run(db_engine, dataset, query_set)
+    exported = export_sample(db_engine, other_run, size=10, seed=1)
+    labels = tmp_path / "labels.csv"
+    labels.write_text(_fill(exported, ANSWERS, _publications(db_engine, other_run)), "utf-8")
+    with pytest.raises(LabelError, match="does not belong to run"):
+        import_labels(db_engine, run_id, labels, labeller="T")
+
+
+class _BrokenJudge(ScriptedModels):
+    """TEST-ONLY judge whose output never validates."""
+
+    def structured[T: BaseModel](
+        self,
+        role: ModelRole,
+        prompt: PromptTemplate,
+        variables: Mapping[str, str],
+        output_model: type[T],
+        *,
+        use_cache: bool = True,
+    ) -> StructuredResult[T]:
+        raise StructuredOutputError("never valid JSON", cache_key="key-1")
+
+
+def test_a_broken_judge_stops_the_run_instead_of_filling_the_review_queue(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    dataset, query_set = _prepared(db_engine, object_storage)
+    with pytest.raises(ClassificationError, match="no valid output for 5 of 5 calls"):
+        classify(
+            db_engine,
+            _BrokenJudge(),
+            dataset_id=dataset,
+            query_set_id=query_set,
+            settings=SETTINGS,
+            judge_model="broken",
+        )
+    with Session(db_engine) as session:
+        assert session.scalars(select(RelevanceDecision)).first() is None  # nothing stored
 
 
 def test_unreviewed_uncertain_families_block_publication(
@@ -330,5 +434,8 @@ def test_review_and_label_commands(
     sample = tmp_path / "sample.csv"
     plr("label", "export", run_id, "--out", str(sample), "--size", "2")
     assert sample.read_text(encoding="utf-8").count("\n") == 3
+    queue = tmp_path / "queue.csv"
+    plr("label", "review", run_id, "--out", str(queue))
+    assert queue.read_text(encoding="utf-8").count("\n") == 2
     evaluated = json.loads(plr("classify", "evaluate", run_id, code=1))
     assert evaluated["publishable"] is False

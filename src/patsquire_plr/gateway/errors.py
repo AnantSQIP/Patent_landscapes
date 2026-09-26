@@ -18,7 +18,14 @@ class PermanentProviderError(GatewayError):
 
 
 class StructuredOutputError(GatewayError):
-    """The model's output never validated against the schema within the allowed retries."""
+    """The model's output never validated against the schema within the allowed retries.
+
+    ``cache_key`` identifies the call, so its logged attempts can be found in ``llm_call``.
+    """
+
+    def __init__(self, message: str, *, cache_key: str | None = None) -> None:
+        super().__init__(message)
+        self.cache_key = cache_key
 
 
 class MissingSecretError(GatewayError):

@@ -20,8 +20,8 @@ assigns the segment with valid evidence.
 * Both yes: ``assigned``.
 * Both no: ``not_assigned``.
 * They differ: ``uncertain``.
-* No usable judge answer: ``uncertain`` where the embedding votes yes, otherwise
-  ``not_assigned``, since two methods are needed to assign.
+* No usable judge answer (the call failed): ``uncertain`` for every segment. One method
+  alone can neither assign a segment nor rule it out, so the family goes to review.
 """
 
 from __future__ import annotations
@@ -102,10 +102,9 @@ def decide_segment(
     embedding_vote: bool, judge_vote: bool | None, judge_problem: str | None
 ) -> tuple[SegmentFinal, str]:
     if judge_vote is None:
+        side = "yes" if embedding_vote else "no"
         why = judge_problem or "no judge answer"
-        if embedding_vote:
-            return "uncertain", f"embedding says yes; judge not usable ({why})"
-        return "not_assigned", f"embedding says no; judge not usable ({why})"
+        return "uncertain", f"embedding says {side}; judge not usable ({why})"
     if embedding_vote and judge_vote:
         return "assigned", "embedding and judge agree"
     if not embedding_vote and not judge_vote:

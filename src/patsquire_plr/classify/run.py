@@ -17,6 +17,7 @@ from typing import Protocol
 
 from pydantic import BaseModel
 from sqlalchemy import Engine, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from patsquire_plr.classify.decide import (
@@ -90,6 +91,7 @@ class Models(Protocol):
 
 
 Progress = Callable[[str], None]
+JUDGE_INVALID = "judge output invalid"
 
 
 @dataclass
@@ -128,7 +130,6 @@ def classify(
     dataset_id: uuid.UUID,
     query_set_id: uuid.UUID,
     settings: ClassificationSettings,
-    embedding_model: str,
     judge_model: str,
     progress: Progress = lambda _: None,
 ) -> RunResult:
@@ -147,7 +148,9 @@ def classify(
     segment_protos = [Prototype(f"segment:{s.id}", segment_prototype_text(s)) for s in segments]
 
     progress(f"embedding {len(families)} family texts and {len(prototypes)} prototypes")
-    vectors = _embed(models, [f.text for f in families if f.text] + [p.text for p in prototypes])
+    vectors, embedding_backend, embedding_model = _embed(
+        models, [f.text for f in families if f.text] + [p.text for p in prototypes]
+    )
 
     relevance = [
         _judge_relevance(
@@ -173,10 +176,11 @@ def classify(
         )
         for f in _progress(relevant, progress, "segments")
     }
+    _check_judge_failures(relevance, segment_results, settings)
     summary = _summary(relevance, segment_results, known, scope.known_relevant)
     config: dict[str, object] = {
         "settings": settings.model_dump(mode="json"),
-        "embedding_model": embedding_model,
+        "embedding": {"backend": embedding_backend, "model": embedding_model},
         "judge_model": judge_model,
         "prompts": {
             p.id: {"version": p.version, "sha256": p.sha256}
@@ -195,6 +199,7 @@ def classify(
         relevance=relevance,
         segments=segment_results,
         vectors=vectors,
+        embedding_backend=embedding_backend,
         embedding_model=embedding_model,
     )
     return RunResult(run_id=run_id, summary=summary)
@@ -228,12 +233,13 @@ def _known_texts(engine: Engine, publications: Sequence[str]) -> dict[str, str]:
     return texts
 
 
-def _embed(models: Models, texts: list[str]) -> dict[str, tuple[float, ...]]:
+def _embed(models: Models, texts: list[str]) -> tuple[dict[str, tuple[float, ...]], str, str]:
+    """(text -> vector, backend, model) as reported by the gateway for this call."""
     unique = list(dict.fromkeys(texts))
     result = models.embed(unique)
     if len(result.vectors) != len(unique):
         raise ClassificationError("the embedding model returned a different number of vectors")
-    return dict(zip(unique, result.vectors, strict=True))
+    return dict(zip(unique, result.vectors, strict=True)), result.backend, result.model
 
 
 def _judge_relevance(
@@ -338,8 +344,36 @@ def _ask[T: BaseModel](
     try:
         result = models.structured("bulk_classifier", prompt, variables, output)
     except StructuredOutputError as exc:
-        return None, f"judge output invalid: {exc}", None
+        return None, f"{JUDGE_INVALID}: {exc}", exc.cache_key
     return result.value, None, result.cache_key
+
+
+def _check_judge_failures(
+    relevance: Sequence[_Relevance],
+    segments: dict[str, list[_Segment]],
+    settings: ClassificationSettings,
+) -> None:
+    """A judge that fails for many families is broken (e.g. output cut off), not
+    uncertain: the run stops instead of filling the review queue with its failures."""
+    outcomes = [
+        str((r.judge_record or {}).get("problem") or "").startswith(JUDGE_INVALID)
+        for r in relevance
+        if r.judge_record is not None
+    ] + [
+        bool(rows[0].judge_record and rows[0].judge_record.get("call_problem"))
+        for rows in segments.values()
+        if rows
+    ]
+    failed = sum(outcomes)
+    if (
+        outcomes
+        and Decimal(failed) / Decimal(len(outcomes)) > settings.relevance.max_judge_failure_rate
+    ):
+        raise ClassificationError(
+            f"the judge gave no valid output for {failed} of {len(outcomes)} calls, more than "
+            f"the allowed {settings.relevance.max_judge_failure_rate}; check the model and "
+            "its max_output_tokens (see llm_call for the attempts)"
+        )
 
 
 def _summary(
@@ -390,6 +424,7 @@ def _store(
     relevance: Sequence[_Relevance],
     segments: dict[str, list[_Segment]],
     vectors: dict[str, tuple[float, ...]],
+    embedding_backend: str,
     embedding_model: str,
 ) -> uuid.UUID:
     with Session(engine) as session, session.begin():
@@ -402,23 +437,19 @@ def _store(
         )
         session.add(run)
         session.flush()
-        existing = set(
-            session.scalars(
-                select(TextEmbedding.text_sha256).where(TextEmbedding.model == embedding_model)
-            )
-        )
-        for text, vector in vectors.items():
-            digest = text_sha256(text)
-            if digest not in existing:
-                session.add(
-                    TextEmbedding(
-                        model=embedding_model,
-                        text_sha256=digest,
-                        dims=len(vector),
-                        embedding=list(vector),
-                    )
-                )
-                existing.add(digest)
+        embedding_rows = [
+            {
+                "backend": embedding_backend,
+                "model": embedding_model,
+                "text_sha256": text_sha256(text),
+                "dims": len(vector),
+                "embedding": list(vector),
+            }
+            for text, vector in vectors.items()
+        ]
+        for start in range(0, len(embedding_rows), 1000):
+            chunk = embedding_rows[start : start + 1000]
+            session.execute(pg_insert(TextEmbedding).values(chunk).on_conflict_do_nothing())
         for r in relevance:
             f = r.family
             session.add(

@@ -271,6 +271,9 @@ class RelevanceSettings(_Section):
     low_threshold: Unit = Field(description="score <= this: not relevant by embedding")
     qa_sample_rate: Unit = Field(description="share of confident families also sent to the judge")
     min_judge_confidence: Literal["medium", "high"]
+    max_judge_failure_rate: Unit = Field(
+        description="above this share of judge calls with no valid output the run is aborted"
+    )
 
     @model_validator(mode="after")
     def _ordered(self) -> Self:
@@ -286,10 +289,15 @@ class SegmentSettings(_Section):
 class EvaluationSettings(_Section):
     """Minimums a run must meet on the human-labelled gold set to be publishable."""
 
-    min_gold_labels: int = Field(ge=1)
+    min_gold_labels: int = Field(ge=1, description="relevance labels from random samples")
+    min_gold_positives: int = Field(ge=1, description="of which labelled relevant")
+    min_segment_labels: int = Field(ge=1, description="sampled relevant families with segments")
     min_precision: Unit
     min_recall: Unit
     min_segment_f1: Unit
+    gate_on: Literal["lower_bound", "point"] = Field(
+        description="compare the minimums with the 95% lower bound (strict) or the estimate"
+    )
 
 
 class ClassificationSettings(_Section):

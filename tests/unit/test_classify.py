@@ -14,8 +14,8 @@ from patsquire_plr.classify.decide import (
     decide_segment,
     usable,
 )
-from patsquire_plr.classify.evaluate import Counts, wilson
-from patsquire_plr.classify.gold import LabelError, _parse
+from patsquire_plr.classify.evaluate import Counts, _problems, wilson
+from patsquire_plr.classify.gold import LabelError, _parse, _read_rows
 from patsquire_plr.classify.judges import (
     RelevanceJudgement,
     SegmentAssignment,
@@ -26,6 +26,7 @@ from patsquire_plr.classify.judges import (
 )
 from patsquire_plr.classify.texts import FamilyText
 from patsquire_plr.classify.vectors import cosine, in_sample
+from patsquire_plr.config import EvaluationSettings
 
 HIGH, LOW = Decimal("0.5000"), Decimal("0.3500")
 
@@ -125,7 +126,7 @@ def test_relevance_decisions(family_band: str, judged: UsableJudgement | None, f
         (True, False, "uncertain"),
         (False, True, "uncertain"),
         (True, None, "uncertain"),
-        (False, None, "not_assigned"),
+        (False, None, "uncertain"),  # one method alone cannot rule a segment out
     ],
 )
 def test_segment_decisions(embedding: bool, judge: bool | None, final: str) -> None:
@@ -140,7 +141,8 @@ def test_segment_decisions(embedding: bool, judge: bool | None, final: str) -> N
     [
         ("large  LANGUAGE model", None),  # case and spacing do not matter
         ('"a large language model."', None),  # surrounding quotes and dot are ignored
-        ("xy", "no evidence quoted"),
+        ("xy", "shorter than 15 characters"),
+        ("language", "shorter than 15 characters"),  # a fragment proves nothing
         ("a quantum computer", "evidence is not in the patent text"),
     ],
 )
@@ -177,54 +179,130 @@ def test_rates_come_from_counts() -> None:
     assert (empty["precision"], empty["recall"], empty["f1"]) == (None, None, None)
 
 
+# ------------------------------------------------------------------ publishable rule
+
+
+def _settings(**overrides: object) -> EvaluationSettings:
+    values: dict[str, object] = {
+        "min_gold_labels": 10,
+        "min_gold_positives": 5,
+        "min_segment_labels": 1,
+        "min_precision": "0.8000",
+        "min_recall": "0.8000",
+        "min_segment_f1": "0.7000",
+        "gate_on": "point",
+        **overrides,
+    }
+    return EvaluationSettings.model_validate(values)
+
+
+def test_gates_compare_unrounded_values() -> None:
+    almost = Counts(tp=79996, fp=20004, fn=0, tn=0)  # precision 0.79996 rounds to 0.8000
+    assert almost.rates()["precision"] == "0.8000"
+    assert not almost.meets("precision", Decimal("0.8000"), "point")
+    assert Counts(tp=8, fp=2, fn=0, tn=0).meets("precision", Decimal("0.8000"), "point")
+    # The 95% lower bound of 8/10 is 0.4902: far below 0.80 with such a small sample.
+    assert not Counts(tp=8, fp=2, fn=0, tn=0).meets("precision", Decimal("0.8"), "lower_bound")
+    assert Counts(tp=950, fp=50, fn=0, tn=0).meets("precision", Decimal("0.9"), "lower_bound")
+    assert not Counts(tp=0, fp=0, fn=0, tn=5).meets("recall", Decimal("0.1"), "point")
+
+
+def test_publishable_rule() -> None:
+    good = Counts(tp=9, fp=1, fn=1, tn=9)
+    assert _problems(good, segments={"segment:a": Counts(9, 1, 1, 0)}, segment_families=9,
+                     settings=_settings(), unresolved=[], conflicts=[]) == []  # fmt: skip
+    problems = _problems(
+        Counts(tp=2, fp=0, fn=0, tn=3),
+        segments={"segment:a": Counts(tp=0, fp=30, fn=0, tn=0), "segment:b": Counts(0, 0, 0, 5)},
+        segment_families=0,
+        settings=_settings(),
+        unresolved=["f1"],
+        conflicts=[("f2", "relevance")],
+    )
+    assert problems == [
+        "only 5 sampled relevance labels; at least 10 are needed",
+        "only 2 sampled families labelled relevant; at least 5 are needed",
+        "only 0 sampled relevant families have segment labels; at least 1 are needed",
+        "segment:a F1 0.0000 is below 0.7000",  # wrong assignments count even with no positives
+        "1 labels differ between labellers; reconcile them",
+        "1 families still need a person's review",
+    ]
+    strict = _problems(
+        good,
+        segments={},
+        segment_families=9,
+        settings=_settings(gate_on="lower_bound"),
+        unresolved=[],
+        conflicts=[],
+    )
+    assert strict == [
+        "relevance precision (95% lower bound) is below 0.8000",
+        "relevance recall (95% lower bound) is below 0.8000",
+    ]
+
+
 # ------------------------------------------------------------------ label files
 
 
-def _csv(*rows: str) -> bytes:
-    return (
-        "family_key,publication,title,abstract,relevant,segments,notes\n" + "\n".join(rows)
-    ).encode()
+def _csv(*rows: str, delimiter: str = ",") -> bytes:
+    header = delimiter.join(("export_id", "family_key", "relevant", "segments"))
+    return (header + "\n" + "\n".join(rows)).encode()
+
+
+def _labels(content: bytes, families: set[str], segments: list[str]) -> list[tuple[str, str, bool]]:
+    labels, _ = _parse(_read_rows(content), families, segments)
+    return labels
 
 
 def test_label_rows_become_relevance_and_segment_labels() -> None:
-    labels, rows, blank = _parse(
-        "﻿".encode() + _csv("f1,,,,y,a;b,", "f2,,,,n,,", "f3,,,,,,", "f4,,,,Yes,none,"),
+    labels = _labels(
+        "\ufeff".encode() + _csv("e,f1,y,a;b", "e,f2,n,", "e,f3,,", "e,f4,Yes ,none"),
         {"f1", "f2", "f3", "f4"},
-        ["a", "b", "c"],
+        ["a", "b"],
     )
-    assert (rows, blank) == (4, 1)
     assert labels == [
         ("f1", "relevance", True),
         ("f1", "segment:a", True),
         ("f1", "segment:b", True),
-        ("f1", "segment:c", False),
-        ("f2", "relevance", False),
+        ("f2", "relevance", False),  # not relevant: every segment is "no" too
+        ("f2", "segment:a", False),
+        ("f2", "segment:b", False),
         ("f4", "relevance", True),
         ("f4", "segment:a", False),
         ("f4", "segment:b", False),
-        ("f4", "segment:c", False),
     ]
+
+
+def test_excel_files_from_other_locales_are_read() -> None:
+    semicolons = _csv("e;f1;y;a", delimiter=";")
+    assert _labels(semicolons, {"f1"}, ["a"])[0] == ("f1", "relevance", True)
+    tabs = _csv("e\tf1\tn\t", delimiter="\t")
+    assert _labels(tabs, {"f1"}, ["a"])[0] == ("f1", "relevance", False)
+    with pytest.raises(LabelError, match="CSV UTF-8"):
+        _read_rows("export_id,family_key,relevant,segments\ne,f1,y,caf\u00e9".encode("cp1252"))
 
 
 @pytest.mark.parametrize(
     ("row", "message"),
     [
-        ("f9,,,,y,,", "not in this run"),
-        ("f1,,,,maybe,,", "must be y or n"),
-        ("f1,,,,n,a,", "not relevant"),
-        ("f1,,,,y,zz,", "unknown segments"),
-        ("f1,,,,,a,", "'relevant' is blank"),
+        ("e,f9,y,", "not in this export"),
+        ("e,f1,maybe,", "must be y or n"),
+        ("e,f1,n,a", "not relevant"),
+        ("e,f1,y,zz", "unknown segments"),
+        ("e,f1,,a", "'relevant' is blank"),
     ],
 )
 def test_invalid_label_rows_reject_the_whole_file(row: str, message: str) -> None:
     with pytest.raises(LabelError, match=message):
-        _parse(_csv("f2,,,,y,,", row), {"f1", "f2"}, ["a"])
+        _labels(_csv("e,f2,y,", row), {"f1", "f2"}, ["a"])
 
 
 def test_label_files_need_their_columns_and_some_labels() -> None:
     with pytest.raises(LabelError, match="lacks columns"):
-        _parse(b"family_key,notes\nf1,x\n", {"f1"}, ["a"])
+        _read_rows(b"family_key,notes\nf1,x\n")
+    with pytest.raises(LabelError, match="empty"):
+        _read_rows(b"")
     with pytest.raises(LabelError, match="no labels"):
-        _parse(_csv("f1,,,,,,"), {"f1"}, ["a"])
+        _labels(_csv("e,f1,,"), {"f1"}, ["a"])
     with pytest.raises(LabelError, match="appears twice"):
-        _parse(_csv("f1,,,,y,,", "f1,,,,n,,"), {"f1"}, ["a"])
+        _labels(_csv("e,f1,y,", "e,f1,n,"), {"f1"}, ["a"])

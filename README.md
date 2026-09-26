@@ -57,6 +57,14 @@ Secrets are masked in `repr`, in `plr config show` and in logs. See
 | `plr ingest resume BATCH_ID` | Retries only the failed items of a batch. |
 | `plr dataset build --batch ID... --name N` | Builds an immutable dataset: one copy per publication, patent families, normalised applicant names. Prints the review report. |
 | `plr dataset report DATASET_ID [--output json]` | Reprints the normalisation report (name merges, look-alikes to review, conflicts). |
+| `plr cpc load CPCTitleList<YYYYMM>.zip` | Stores an official CPC title list (hash-verified; one version is never replaced). |
+| `plr cpc check CODES...` / `plr cpc search TERMS...` | Checks codes against the scheme, or searches CPC titles. |
+| `plr landscape create SCOPE.yaml --name N` | Records a landscape scope (topic, publication dates, offices, seeds, confirmed patents). See `examples/scopes/`. |
+| `plr taxonomy draft LANDSCAPE_ID` | The reasoner model drafts segments and keywords, then picks CPC codes only from official candidates. Prints editable YAML. |
+| `plr taxonomy show` / `import` / `approve` | Shows a version, imports a person's edit as a new version, and records approval or rejection (`--by NAME`). |
+| `plr queries generate VERSION_ID` | Generates the query set (EPO OPS CQL, Lens JSON, BigQuery SQL, local) from an approved taxonomy. |
+| `plr queries show` / `count` / `recall` / `approve` | Prints queries, counts them over stored batches, checks recall of confirmed patents, and approves the set. |
+| `plr discover citations QUERY_SET_ID` | Key-less discovery: follows citations from the seeds (approved query set required). Re-running resumes. |
 
 ## Tests
 

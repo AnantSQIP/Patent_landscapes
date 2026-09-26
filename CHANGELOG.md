@@ -4,6 +4,28 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added: Phase 5, scope, taxonomy and key strings
+- **Official CPC scheme:** the CPC Title List 2026.08 (254,314 entries) is stored
+  hash-verified and parsed exactly. It supports checking codes, title search and the
+  hierarchy (`plr cpc`).
+- **Landscapes:** scope files, taxonomy versions, approvals, query sets, query counts,
+  discovery runs and recall checks. All are append-only (migration 0007).
+- **Taxonomy drafting:** the model writes the language (segments, keywords), and code
+  finds official CPC candidates. The model may choose codes only from those candidates.
+  Rejected terms, codes and repeated segments are recorded. People edit YAML, and each
+  edit is imported as a new version.
+- **Approval gate** (`landscape.approval_mode`: human or automatic). Automatic approvals
+  are recorded as automatic.
+- **Deterministic key strings** for EPO OPS CQL, Lens JSON and BigQuery SQL, with syntax
+  sources in docs/architecture/query_syntax.md. PatentsView is skipped while its API is
+  offline.
+- **Local counts and recall** over stored records, where records that cannot be evaluated
+  make a count a lower bound.
+- **Citation expansion** from seed patents as key-less discovery. It is resumable, and
+  every excluded candidate has a reason.
+- `StructuredResult.cache_key` (provenance of model calls); read-only `batch_summary`.
+- `cli_common` / `cli_landscape` split out of `cli.py`. ADR 0010.
+
 ### Added: user PDF folders
 - `plr ingest folder FOLDER`: publication numbers come from the file names, and a data
   source supplies the records. Each file's name, size and sha256 are recorded as batch

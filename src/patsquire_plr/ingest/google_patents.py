@@ -202,11 +202,25 @@ class GooglePatentsPageSource:
     def fetch(self, keys: Sequence[str]) -> Iterator[Fetched]:
         for key in keys:
             try:
-                number = normalize_publication_number(key).text
+                publication = normalize_publication_number(key)
             except NormalizationError as exc:
                 yield Fetched(requested_key=key, status="invalid_request", detail=str(exc))
                 continue
-            yield self._fetch_one(key, f"{self._settings.base_url}/patent/{number}/")
+            fetched = self._fetch_one(key, f"{self._settings.base_url}/patent/{publication.text}/")
+            if fetched.status == "not_found" and publication.kind is not None:
+                # Kind codes are written differently in places (e.g. a reissue filed as "E"
+                # that Google lists as "E1"): try the bare number once. The runner then checks
+                # the served country and number, and records any kind difference.
+                bare = f"{publication.country}{publication.number}"
+                retry = self._fetch_one(key, f"{self._settings.base_url}/patent/{bare}/")
+                if retry.status == "ok":
+                    fetched = retry.model_copy(
+                        update={
+                            "kind_fallback": True,
+                            "detail": f"kind {publication.kind} not found; looked up {bare}",
+                        }
+                    )
+            yield fetched
 
     def _fetch_one(self, key: str, url: str) -> Fetched:
         detail = ""

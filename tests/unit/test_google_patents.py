@@ -236,6 +236,7 @@ def test_fetch_outcomes() -> None:
     assert requested == [
         "https://patents.google.com/patent/US10000000B2/",
         "https://patents.google.com/patent/US1234B1/",
+        "https://patents.google.com/patent/US1234/",  # retried once without the kind code
     ]
 
 
@@ -400,3 +401,29 @@ def test_one_unparseable_family_member_marks_only_that_field() -> None:
     assert result.warnings == (
         "family_members: ambiguous kind code in publication number: 'XX123ABC'",
     )
+
+
+def test_kind_code_fallback_looks_up_the_bare_number_once() -> None:
+    page = _page("US10000000B2")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/patent/US10000000/":
+            return httpx.Response(200, content=page)
+        return httpx.Response(404)
+
+    [result] = _source(httpx.MockTransport(handler)).fetch(["US10000000B1"])
+    assert result.status == "ok"
+    assert result.kind_fallback is True
+    assert result.detail == "kind B1 not found; looked up US10000000"
+
+
+def test_no_fallback_when_no_kind_was_requested() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(404)
+
+    [result] = _source(httpx.MockTransport(handler)).fetch(["US10000000"])
+    assert result.status == "not_found"
+    assert calls == ["/patent/US10000000/"]

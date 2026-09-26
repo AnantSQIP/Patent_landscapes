@@ -455,3 +455,27 @@ def test_resume_refuses_a_different_adapter_version(
     upgraded._info = upgraded.info.model_copy(update={"adapter_version": "99"})
     with pytest.raises(PlrError, match="created with adapter 3"):
         run_lookup_batch(db_engine, RawStore(object_storage), upgraded, batch_id)
+
+
+def test_kind_fallback_is_stored_with_the_difference_recorded(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    page = _pages()["US10000000B2"]
+
+    def handler(request: httpx.Request) -> httpx.Response:  # requested "B1" exists only as B2
+        if request.url.path == "/patent/US10000000/":
+            return httpx.Response(200, content=page)
+        return httpx.Response(404)
+
+    source = _source(handler)
+    report = run_lookup_batch(
+        db_engine,
+        RawStore(object_storage),
+        source,
+        start_lookup_batch(db_engine, source, ["US10000000B1"]),
+    )
+
+    assert report.outcomes == {"stored": 1}
+    with Session(db_engine) as session:
+        detail = session.scalar(select(IngestItem.detail))
+    assert detail == "kind B1 not found; looked up US10000000; stored US10000000B2"

@@ -290,6 +290,7 @@ def taxonomy_import(
             cache_keys=[],
             parent_id=previous_row.id if previous_row else None,
             actor=by,
+            require_parent_is_newest=True,
         )
     typer.echo(f"taxonomy version {row.version}: {row.id}")
 

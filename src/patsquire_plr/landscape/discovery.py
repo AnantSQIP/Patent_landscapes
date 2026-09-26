@@ -242,7 +242,7 @@ def _frontier(
             for d in rows
         }
     if search is None:
-        return sorted(documents.values()), 0, 0
+        return sorted(documents.values()), len(documents), 0  # all followed, none rejected
     matched, undecidable = [], 0
     records = load_match_records(engine, [batch_id])
     for record in records:

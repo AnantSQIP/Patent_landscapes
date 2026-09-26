@@ -28,6 +28,10 @@ class NotFoundError(PlrError):
     """A referenced landscape, taxonomy version or query set does not exist."""
 
 
+class StaleEditError(PlrError):
+    """An edit was made from a version that is no longer the newest."""
+
+
 class NotApprovedError(PlrError):
     """A step needs an approval that has not been given."""
 
@@ -68,18 +72,29 @@ def add_taxonomy_version(
     cache_keys: list[str],
     parent_id: uuid.UUID | None,
     actor: str,
+    require_parent_is_newest: bool = False,
 ) -> TaxonomyVersion:
+    """Add the next version. With ``require_parent_is_newest`` (a person's edit), the
+    newest version is re-read under the landscape lock and must be ``parent_id`` (or there
+    must be none when it is None), so two concurrent edits can never overwrite each other."""
     payload = content.model_dump(mode="json")
     with Session(engine, expire_on_commit=False) as session, session.begin():
         if session.get(Landscape, landscape_id) is None:
             raise NotFoundError(f"no landscape {landscape_id}")
         # Serialise version numbering per landscape (the unique constraint is the backstop).
         session.execute(select(func.pg_advisory_xact_lock(landscape_id.int % (2**63))))
-        latest = session.scalar(
-            select(func.max(TaxonomyVersion.version)).where(
-                TaxonomyVersion.landscape_id == landscape_id
-            )
+        newest = session.scalar(
+            select(TaxonomyVersion)
+            .where(TaxonomyVersion.landscape_id == landscape_id)
+            .order_by(TaxonomyVersion.version.desc())
+            .limit(1)
         )
+        if require_parent_is_newest and (newest.id if newest else None) != parent_id:
+            raise StaleEditError(
+                f"the edit was made from {parent_id or 'no version'}, but the newest version "
+                f"is now {newest.id if newest else 'none'}; export it again so no edit is lost"
+            )
+        latest = newest.version if newest else None
         row = TaxonomyVersion(
             landscape_id=landscape_id,
             version=(latest or 0) + 1,

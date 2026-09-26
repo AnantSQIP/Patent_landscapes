@@ -259,9 +259,12 @@ def test_citation_expansion_counts_and_recall(
     assert hop1.candidates == sum(hop1.excluded.values()) + hop1.requested
     hop2 = hops[2]
     assert hop2.frontier == 2  # only the records the search matches are followed
-    assert hop2.records_evaluated == (
-        hop2.frontier + hop2.frontier_undecidable + hop2.frontier_rejected
-    )
+    for hop in hops[1:]:  # every record of the previous hop is accounted for
+        assert hop.records_evaluated == (
+            hop.frontier + hop.frontier_undecidable + hop.frontier_rejected
+        )
+        assert min(hop.frontier_rejected, hop.frontier_undecidable) >= 0
+    assert (hop1.records_evaluated, hop1.frontier_rejected) == (1, 0)
     assert hop2.excluded["already_requested"] >= 1
 
     # Running again continues the same batches instead of starting new ones.
@@ -549,3 +552,29 @@ def _cli_config(
     for name, value in secrets.items():
         monkeypatch.setenv(name, value)
     return config
+
+
+def test_concurrent_edits_cannot_overwrite_each_other(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    from patsquire_plr.landscape.store import StaleEditError  # noqa: PLC0415
+
+    landscape_id, v1, scheme = _prepared(db_engine, object_storage)
+    scheme_id = get_taxonomy(db_engine, version_id=v1)[0].classification_scheme_id
+
+    def edit() -> None:  # both people exported v1
+        add_taxonomy_version(
+            db_engine,
+            landscape_id=landscape_id,
+            content=_content(scheme),
+            origin="user_edit",
+            scheme_id=scheme_id,
+            cache_keys=[],
+            parent_id=v1,
+            actor="someone",
+            require_parent_is_newest=True,
+        )
+
+    edit()
+    with pytest.raises(StaleEditError, match="export it again"):
+        edit()

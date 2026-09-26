@@ -154,6 +154,8 @@ class CpcScheme:
             code_group, symbol_group = _main_group(code)[1], _main_group(symbol)[1]
         except ValueError:
             return None
+        if target is not None and target.dot_level == 0 and code_group == symbol_group:
+            return True  # every group numbered like a queried main group is inside it
         related = {symbol_group, symbol_group + INDEXING_OFFSET, symbol_group - INDEXING_OFFSET}
         return None if code_group in related else False
 
@@ -190,6 +192,7 @@ class CpcScheme:
         lower symbol, so the order is deterministic. ``within`` limits the search to symbols
         starting with those prefixes (e.g. subclasses ``["G06F", "G06N"]``).
         """
+        terms = list(terms)
         problems = search_term_problems(terms)
         phrases = {t: _words(t) for t in terms if t not in problems}
         scope = [

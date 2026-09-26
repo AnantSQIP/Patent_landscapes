@@ -118,6 +118,8 @@ def test_descendants_and_membership(scheme: CpcScheme) -> None:
     assert scheme.is_within("G06N3/9999", "G06N3/04") is None  # same main group: unknown
     assert scheme.is_within("G06N2003/99", "G06N3/04") is None  # its indexing mirror
     assert scheme.is_within("G06N3/9999", "G06N") is True  # inside a queried subclass
+    assert scheme.is_within("G06N3/9999", "G06N3/00") is True  # inside a queried main group
+    assert scheme.is_within("G06N2003/99", "G06N3/00") is None  # indexing mirror: unknown
 
 
 @pytest.mark.parametrize(
@@ -192,3 +194,7 @@ def test_search_keeps_non_ascii_words_whole() -> None:
 
 def test_the_test_archive_is_deterministic() -> None:
     assert title_list_zip() == title_list_zip()
+
+
+def test_search_accepts_any_iterable(scheme: CpcScheme) -> None:
+    assert scheme.search(iter(["neural network"])) == scheme.search(["neural network"])

@@ -311,7 +311,7 @@ def test_source_identifies_its_format_version() -> None:
     assert (info.source_id, info.source_type, info.adapter_version) == (
         "google_patents",
         "google_patents_page",
-        "4",
+        "5",
     )
     assert info.source_api_version == SOURCE_API_VERSION
 
@@ -439,3 +439,25 @@ def test_an_unsuccessful_fallback_keeps_its_own_outcome(bare_status: int, status
     assert result.kind_fallback is False
     assert result.detail is not None
     assert result.detail.startswith("kind B1 not found; looked up US10000000: ")
+
+
+@pytest.mark.parametrize(
+    ("attributes", "stored"),
+    [
+        ('lang="EN" source="national office" load-source="docdb"', True),
+        ('lang="EN" load-source="patent-office"', True),
+        ('lang="EN" load-source="docdb"', False),  # DOCDB, but not the office's own text
+        ('lang="EN" source="national office" load-source="WIPO-OCR"', False),
+    ],
+)
+def test_abstracts_are_stored_only_from_official_sources(attributes: str, stored: bool) -> None:
+    page = _page("US10000000B2")
+    start = page.index(b"<abstract ")
+    end = page.index(b">", start)
+    page = page[:start] + f"<abstract {attributes}".encode() + page[end:]
+    [(d, _)] = (
+        _source().normalize(page, raw_record_id=uuid.UUID(int=1), retrieved_at=RETRIEVED).documents
+    )
+    assert (d.abstract is not None) is stored
+    if not stored:
+        assert d.missing["abstract"] is MissingReason.UNPARSEABLE

@@ -6,9 +6,9 @@ Scope and rules (ADR 0005):
   configured polite rate. There is no searching; this source looks up known numbers.
 * The page *without* a language suffix is fetched, because it shows the document in its
   original language. Title, abstract and claims are accepted only when the page marks them
-  as coming from the patent office (``load-source="patent-office"``) or, for the title, when
-  the page shows no machine translation. Google's own translations are never stored as
-  document text.
+  as the patent office's text (``load-source="patent-office"``, or ``"docdb"`` supplied by
+  the national office) or, for the title, when the page shows no machine translation.
+  Google's own translations are never stored as document text.
 * Google labels its priority date, assignees and legal status as unverified. They are
   stored exactly as shown (raw legal-status text kept), with Google Patents recorded as the
   source.
@@ -50,15 +50,21 @@ from patsquire_plr.ingest.sources import Fetched, Normalized, SourceInfo
 from patsquire_plr.ratelimit import RateLimiter
 
 # 2: family members captured; 3: unparseable list entries mark only that field;
-# 4: a kind code that is not found is looked up once without it (ADR 0009)
-ADAPTER_VERSION = "4"
+# 4: a kind code that is not found is looked up once without it (ADR 0009);
+# 5: abstracts from DOCDB as supplied by the national office are official text
+ADAPTER_VERSION = "5"
 SOURCE_API_VERSION = "patents.google.com patent page, schema.org microdata (verified 2026-09-25)"
 HTTP_OK = 200
 HTTP_NOT_FOUND = 404
 HTTP_TOO_MANY_REQUESTS = 429
 HTTP_SERVER_ERROR = 500
 MAX_BACKOFF_S = 30.0
+# Text the page marks as the office's own (verified over 2,001 stored pages, 2026-09-26):
+# "patent-office", or DOCDB's copy of the national office's text. OCR ("WIPO-OCR") and
+# anything else is not accepted.
 OFFICIAL_TEXT = "patent-office"
+DOCDB_TEXT = "docdb"
+DOCDB_OFFICIAL_SOURCE = "national office"
 
 # Google's legal-status wording -> canonical category. Unlisted wording maps to "other";
 # the verbatim text is always kept in ``status_raw``.
@@ -380,16 +386,18 @@ class GooglePatentsPageSource:
     ) -> tuple[str | None, str | None, MissingReason]:
         """(text, language, reason-if-missing) for a section.
 
-        Only the patent office's own text is accepted. Text the page marks as OCR output
-        (e.g. ``WIPO-OCR``) or as a machine translation is present but not reliable, so the
-        field is recorded as ``unparseable`` rather than stored.
+        Only the patent office's own text is accepted: ``load-source="patent-office"``, or
+        ``load-source="docdb"`` with ``source="national office"`` (the EPO DOCDB copy of the
+        office's text; this is how about half of all abstracts are delivered). Text marked
+        as OCR output (e.g. ``WIPO-OCR``), or from any other source, is present but not
+        reliable, so the field is recorded as ``unparseable`` rather than stored.
         """
         sections = _props(root, section)
         blocks = _xpath(sections[0], xpath) if sections else []
         if not blocks:
             return None, None, MissingReason.NOT_PROVIDED_BY_SOURCE
         block: HtmlElement = blocks[0]
-        if block.get("load-source") != OFFICIAL_TEXT:
+        if not _is_official(block):
             return None, None, MissingReason.UNPARSEABLE
         text = " ".join(block.text_content().split())
         lang = block.get("lang")
@@ -532,3 +540,9 @@ class GooglePatentsPageSource:
                 raise _ParseError("forward citation row without publicationNumber")
             numbers.append(normalize_publication_number(raw).text)
         return ForwardCitations(citing_publication_numbers=tuple(numbers), as_of=as_of)
+
+
+def _is_official(block: HtmlElement) -> bool:
+    source: str | None = block.get("load-source")
+    office: str | None = block.get("source")
+    return source == OFFICIAL_TEXT or (source == DOCDB_TEXT and office == DOCDB_OFFICIAL_SOURCE)

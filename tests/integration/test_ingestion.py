@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -467,7 +468,7 @@ def test_resume_refuses_a_different_adapter_version(
 
     upgraded = _source(_serve(_pages()))
     upgraded._info = upgraded.info.model_copy(update={"adapter_version": "99"})
-    with pytest.raises(PlrError, match="created with adapter 4"):
+    with pytest.raises(PlrError, match="created with adapter 5"):
         run_lookup_batch(db_engine, RawStore(object_storage), upgraded, batch_id)
 
 
@@ -565,3 +566,61 @@ def test_batch_provenance_is_stored_with_the_query(
         assert batch is not None
         assert batch.query_text is not None
         assert json.loads(batch.query_text)["provenance"] == provenance
+
+
+def test_stored_pages_are_renormalised_into_a_new_batch_without_fetching(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    from patsquire_plr.ingest.replay import start_replay_batch  # noqa: PLC0415
+
+    pages = _pages()
+
+    def handler(request: httpx.Request) -> httpx.Response:  # B1 exists only as B2
+        number = request.url.path.strip("/").removeprefix("patent/")
+        if number == "US10000000":
+            return httpx.Response(200, content=pages["US10000000B2"])
+        if number in pages:
+            return httpx.Response(200, content=pages[number])
+        return httpx.Response(404)
+
+    source = _source(handler)
+    original = start_lookup_batch(db_engine, source, ["US10000000B1", "EP3123456A1", "US1B1"])
+    run_lookup_batch(db_engine, RawStore(object_storage), source, original)
+
+    offline = _source(lambda request: httpx.Response(500))  # any fetch would fail
+    replay, replay_source = start_replay_batch(
+        db_engine, RawStore(object_storage), offline, original
+    )
+    report = run_lookup_batch(db_engine, RawStore(object_storage), replay_source, replay)
+
+    assert report.status == "complete"
+    assert report.outcomes == {"stored": 2}  # the kind fallback replays as stored
+    with Session(db_engine) as session:
+        batch = session.get(IngestBatch, replay)
+        assert batch is not None
+        provenance = json.loads(batch.query_text or "{}")["provenance"]
+        assert provenance["from_batch"] == str(original)
+        assert provenance["not_replayed"] == {"not_found": 1}
+        times = session.execute(
+            select(RawRecord.batch_id, RawRecord.retrieved_at, RawRecord.sha256).order_by(
+                RawRecord.source_record_key
+            )
+        ).all()
+    by_batch: dict[uuid.UUID, list[tuple[object, str]]] = {}
+    for batch_id, retrieved_at, sha256 in times:
+        by_batch.setdefault(batch_id, []).append((retrieved_at, sha256))
+    assert sorted(by_batch[replay]) == sorted(by_batch[original])  # same pages, same times
+
+
+def test_replay_needs_fetched_pages(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    from patsquire_plr.ingest.replay import start_replay_batch  # noqa: PLC0415
+
+    source = _source(lambda request: httpx.Response(404))
+    batch = start_lookup_batch(db_engine, source, ["US1B1"])
+    run_lookup_batch(db_engine, RawStore(object_storage), source, batch)
+    with pytest.raises(PlrError, match="no fetched pages"):
+        start_replay_batch(db_engine, RawStore(object_storage), source, batch)
+    with pytest.raises(PlrError, match="does not exist"):
+        start_replay_batch(db_engine, RawStore(object_storage), source, uuid.uuid4())

@@ -27,6 +27,7 @@ from patsquire_plr.db.datasets import (
     report_dataset,
 )
 from patsquire_plr.db.engine import create_db_engine
+from patsquire_plr.errors import PlrError
 from patsquire_plr.gateway.gateway import ModelGateway
 from patsquire_plr.gateway.health import check_models
 from patsquire_plr.gateway.secrets import SecretResolver
@@ -34,6 +35,7 @@ from patsquire_plr.gateway.store import PostgresCallStore
 from patsquire_plr.health import default_checks, run_checks
 from patsquire_plr.ingest.folder import FolderError, scan_folder
 from patsquire_plr.ingest.rawstore import RawStore
+from patsquire_plr.ingest.replay import start_replay_batch
 from patsquire_plr.ingest.runner import (
     BatchBusyError,
     ReconciliationError,
@@ -314,6 +316,36 @@ def ingest_resume(
 ) -> None:
     """Retry only the items of a batch whose latest outcome is 'failed', then reconcile."""
     _run_batch(_load(config_file, env_file), source, batch_id, [])
+
+
+@ingest_app.command("renormalize")
+def ingest_renormalize(
+    batch_id: Annotated[uuid.UUID, typer.Argument(help="Batch whose stored pages to re-read.")],
+    source: Annotated[str, typer.Option(help="Configured data source ID.")] = "google_patents",
+    config_file: ConfigFileOption = DEFAULT_CONFIG_FILE,
+    env_file: EnvFileOption = None,
+) -> None:
+    """Re-normalise a batch's stored pages with the current adapter into a new batch.
+    Nothing is fetched; the original pages and retrieval times are used."""
+    settings = _load(config_file, env_file)
+    if source not in settings.data_sources:
+        typer.echo(f"unknown data source '{source}'", err=True)
+        raise typer.Exit(code=2)
+    engine = create_db_engine(settings.database)
+    raw_store = RawStore(settings.object_storage)
+    try:
+        adapter = build_source(source, settings.data_sources[source])
+        replay_batch, replay_source = start_replay_batch(engine, raw_store, adapter, batch_id)
+        typer.echo(f"replay batch {replay_batch} (from {batch_id})", err=True)
+        report = run_lookup_batch(engine, raw_store, replay_source, replay_batch)
+    except (PlrError, ReconciliationError, BatchBusyError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+    typer.echo(report.model_dump_json(indent=2))
+    if report.status != "complete":
+        raise typer.Exit(code=1)
 
 
 @dataset_app.command("build")

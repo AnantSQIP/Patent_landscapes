@@ -4,6 +4,14 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added: user PDF folders
+- `plr ingest folder FOLDER`: publication numbers come from the file names, and a data
+  source supplies the records. Each file's name, size and sha256 are recorded as batch
+  provenance. Numbers are cross-checked against the PDF text layer where one exists.
+  `--scan-only` only checks the files. See ADR 0009.
+- Google Patents adapter: when a number's kind code is not found, it retries once with the
+  bare number (e.g. reissue `E` listed as `E1`).
+
 ### Added: Phase 4, cleaning, patent families, applicant names
 - Stated family members captured from sources (Google "Also Published As"; migration 0005,
   with a `not_requested` backfill for older documents).

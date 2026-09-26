@@ -53,6 +53,7 @@ Secrets are masked in `repr`, in `plr config show` and in logs. See
 | `plr db upgrade` / `plr db current` | Applies or shows database migrations. |
 | `plr models health` | Makes a real call to every model role (see Models below). Exits 1 on any failure. |
 | `plr ingest lookup NUMBERS... [--numbers-file F]` | Fetches publications by number from a data source, stores the raw pages, normalises and reconciles them. Exits 1 if any item failed. |
+| `plr ingest folder FOLDER [--scan-only]` | Looks up every patent in a folder of PDFs named by publication number (e.g. `US10123456B2.pdf`). The folder and file hashes are recorded with the batch. `--scan-only` only checks the files. |
 | `plr ingest resume BATCH_ID` | Retries only the failed items of a batch. |
 | `plr dataset build --batch ID... --name N` | Builds an immutable dataset: one copy per publication, patent families, normalised applicant names. Prints the review report. |
 | `plr dataset report DATASET_ID [--output json]` | Reprints the normalisation report (name merges, look-alikes to review, conflicts). |

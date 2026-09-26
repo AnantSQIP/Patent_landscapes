@@ -125,6 +125,11 @@ def test_descendants_and_membership(scheme: CpcScheme) -> None:
         ({"cpc-section-G_20260801.txt": "G\tPHYSICS\n"}, "expected SYMBOL<TAB>LEVEL<TAB>TITLE"),
         ({"cpc-section-G_20260801.txt": "G06N3/02\t1\tNeural networks\n"}, "no parent group"),
         ({"cpc-section-G_20260801.txt": "G06N3/02\tx\tNeural\n"}, "is not a number"),
+        (
+            {"cpc-section-G_20260801.txt": "G06N3/00\t0\tBio\nG06N5/02\t1\tWrong group\n"},
+            "no parent group",
+        ),
+        ({"cpc-section-G_20260801.txt": "G06N3/00\t0\tNo subclass above\n"}, "parent is not"),
         ({"cpc-section-G_20260801.txt": "G0\t\tBad\n"}, "not a section, class or subclass"),
         ({"cpc-section-G_20260801.txt": "G06N 3/00\t0\tSpaced\n"}, "not in normalised form"),
         ({"cpc-section-G_20260801.txt": "G06N3/0\t0\tShort\n"}, "unrecognised"),
@@ -139,3 +144,20 @@ def test_anything_unexpected_in_the_file_is_an_error(files: dict[str, str], mess
 def test_a_non_zip_is_an_error() -> None:
     with pytest.raises(CpcSchemeError, match="not a zip file"):
         parse_title_list(b"plain text")
+
+
+def test_indexing_codes_sit_under_their_mirror_group() -> None:
+    # Real lines from CPC 2026.08 (cpc-section-A): A01C2001/048 is listed under A01C1/04.
+    lines = (
+        "A\t\tHUMAN NECESSITIES\nA01\t\tAGRICULTURE\nA01C\t\tPLANTING\n"
+        "A01C1/00\t0\tApparatus, or methods of use thereof, for testing or treating seed\n"
+        "A01C1/04\t1\tArranging seed on carriers, e.g. on tapes, on cords\n"
+        "A01C2001/048\t2\t{Machines}\n"
+    )
+    scheme = parse_title_list(title_list_zip({"cpc-section-A_20260801.txt": lines}))
+    entry = scheme.get("A01C2001/048")
+    assert entry is not None
+    assert entry.parent == "A01C1/04"
+    wrong = lines.replace("A01C2001/048", "A01C2002/048")
+    with pytest.raises(CpcSchemeError, match="no parent group"):
+        parse_title_list(title_list_zip({"cpc-section-A_20260801.txt": wrong}))

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from patsquire_plr.canonical import canonical_sha256
 from patsquire_plr.db.audit import append_event
-from patsquire_plr.db.models import Approval, Landscape, TaxonomyVersion
+from patsquire_plr.db.models import Approval, Landscape, QuerySet, TaxonomyVersion
 from patsquire_plr.errors import PlrError
 from patsquire_plr.landscape.scope import Scope
 from patsquire_plr.landscape.taxonomy import Origin, TaxonomyContent
@@ -141,8 +141,15 @@ def record_approval(
 ) -> uuid.UUID:
     if not decided_by.strip():
         raise PlrError("an approval must name who decided")
+    subject_model = TaxonomyVersion if subject_type == "taxonomy_version" else QuerySet
     with Session(engine) as session, session.begin():
+        if session.get(subject_model, subject_id) is None:
+            raise NotFoundError(f"no {subject_type} {subject_id}")
+        # One decision per subject at a time, stamped with the real clock (not the
+        # transaction start), so "the latest decision" is well defined.
+        session.execute(select(func.pg_advisory_xact_lock(subject_id.int % (2**63))))
         row = Approval(
+            created_at=func.clock_timestamp(),
             subject_type=subject_type,
             subject_id=subject_id,
             decision=decision,

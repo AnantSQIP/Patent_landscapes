@@ -146,7 +146,7 @@ def test_bigquery_sql(scheme: CpcScheme) -> None:
         "WHERE p.publication_date BETWEEN 20170101 AND 20241231\n"
         "  AND p.country_code IN ('US', 'EP')\n"
     )
-    assert r"r'\b(?:large[\s\-]+language[\s\-]+model)\b'" in sql
+    assert r"r'(?:^|[^a-z0-9])(?:large[\s\-]+language[\s\-]+model)(?:$|[^a-z0-9])'" in sql
     assert "UNNEST(p.title_localized)" in sql
     assert "UNNEST(p.abstract_localized)" in sql
     assert "SUBSTR(c.code, 1, 4) = 'G06N'" in sql
@@ -169,7 +169,7 @@ def _record(**overrides: object) -> MatchRecord:
         "publication": "US1B2",
         "office": "US",
         "publication_date": date(2020, 5, 1),
-        "text": "Fine-tuning a Large-Language   Model for dialogue",
+        "texts": ("Fine-tuning a Large-Language   Model for dialogue",),
         "cpc": ("G06N3/0455",),
         **overrides,
     }
@@ -182,16 +182,18 @@ def _record(**overrides: object) -> MatchRecord:
         ({}, True, None),
         ({"office": "CN"}, False, None),
         ({"publication_date": date(2016, 1, 1)}, False, None),
-        ({"text": "A modelling language for circuits"}, False, None),
-        ({"text": "LLMs"}, False, None),  # literal: no stemming locally
+        ({"texts": ("A modelling language for circuits",)}, False, None),
+        ({"texts": ("LLMs",)}, False, None),  # literal: no stemming locally
+        ({"texts": ("A large language", "model of text")}, False, None),  # not across fields
         ({"cpc": ("G06F40/40",)}, True, None),  # below G06F40/00
         ({"cpc": ("G10L15/183",)}, False, None),
         ({"publication_date": None}, False, "no publication date"),
-        ({"text": ""}, False, "no title or abstract text"),
+        ({"texts": ()}, False, "no title or abstract text"),
+        ({"texts": (" ",)}, False, "no title or abstract text"),
         ({"cpc": ()}, False, "no CPC codes"),
         ({"cpc": ("G99Z1/00",)}, False, "CPC codes not in 2026.08"),
         ({"publication_date": None, "office": "CN"}, False, None),  # a definite no decides
-        ({"publication_date": None, "text": "unrelated"}, False, None),
+        ({"publication_date": None, "texts": ("unrelated",)}, False, None),
     ],
 )
 def test_local_evaluation(
@@ -204,6 +206,40 @@ def test_local_evaluation(
 
 def test_local_evaluation_without_text_or_code_conditions(scheme: CpcScheme) -> None:
     only_codes = LocalMatcher(_query(phrases=None, offices=()), scheme)
-    assert only_codes.evaluate(_record(text="", office="CN")).matched is True
+    assert only_codes.evaluate(_record(texts=(), office="CN")).matched is True
     only_text = LocalMatcher(_query(cpc=None, phrases=("dialogue",)), scheme)
     assert only_text.evaluate(_record(cpc=())).matched is True
+
+
+@pytest.mark.parametrize(
+    ("text", "found"),
+    [("a c++ compiler", True), ("c++", True), ("xc++ tool", False), ("a c+ compiler", False)],
+)
+def test_terms_with_symbols_match_the_same_way_locally_and_in_bigquery(
+    scheme: CpcScheme, text: str, found: bool
+) -> None:
+    import re  # noqa: PLC0415 - Python re agrees with RE2 on this pattern subset
+
+    query = _query(phrases=("c++",), cpc=None, offices=())
+    sql = to_bigquery_sql(query, scheme)
+    pattern = sql.split("REGEXP_CONTAINS(LOWER(t.text), r'")[1].split("'))")[0]
+    assert (re.search(pattern, text) is not None) is found
+    local = LocalMatcher(query, scheme).evaluate(_record(texts=(text,), cpc=()))
+    assert local.matched is found
+
+
+def test_recall_tries_every_kind_of_a_publication(scheme: CpcScheme) -> None:
+    from patsquire_plr.landscape.search import classify_recall  # noqa: PLC0415
+
+    search = [LocalMatcher(_query(phrases=("dialogue",), cpc=None, offices=()), scheme)]
+    records = [
+        _record(publication="US5A1", texts=("A dialogue system",)),
+        _record(publication="US5B2", texts=("Unrelated",)),  # sorts last
+        _record(publication="US6B1", texts=(), cpc=()),
+    ]
+    found, missed = classify_recall(["US5B2", "US6B1", "US7B1"], records, search)
+    assert found == ["US5B2"]
+    assert missed == {
+        "US6B1": "retrieved, but no segment query matches it (no title or abstract text)",
+        "US7B1": "not among the retrieved records",
+    }

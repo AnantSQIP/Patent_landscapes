@@ -33,7 +33,12 @@ from patsquire_plr.ingest.rawstore import RawStore
 from patsquire_plr.ingest.sources import build_source
 from patsquire_plr.landscape.discovery import expand_citations
 from patsquire_plr.landscape.scope import load_scope
-from patsquire_plr.landscape.search import check_recall, count_locally, create_query_set
+from patsquire_plr.landscape.search import (
+    check_recall,
+    count_locally,
+    create_query_set,
+    query_set_scheme,
+)
 from patsquire_plr.landscape.store import (
     add_taxonomy_version,
     create_landscape,
@@ -96,25 +101,28 @@ def _scheme(settings: Settings, engine: Engine, scheme_id: uuid.UUID | None = No
 def cpc_load(
     zip_file: Annotated[Path, typer.Argument(help="CPCTitleList<YYYYMM>.zip from the CPC site.")],
     source_url: Annotated[
-        str | None, typer.Option(help="Where the file was downloaded from (recorded).")
-    ] = None,
+        str,
+        typer.Option(
+            help="Where the file was downloaded from (recorded as its provenance), e.g. "
+            + CPC_TITLE_LIST_URL.format(yyyymm="202608")
+        ),
+    ],
     config_file: ConfigFileOption = DEFAULT_CONFIG_FILE,
     env_file: EnvFileOption = None,
 ) -> None:
     """Store an official CPC title list and record its version and hash."""
     content = zip_file.read_bytes()
-    yyyymm = zip_file.stem.removeprefix("CPCTitleList")
-    url = source_url or CPC_TITLE_LIST_URL.format(yyyymm=yyyymm)
     with _session_of(config_file, env_file) as (settings, engine):
         try:
             row, added = load_cpc_title_list(
-                engine, RawStore(settings.object_storage), content, source_url=url
+                engine, RawStore(settings.object_storage), content, source_url=source_url
             )
         except CpcSchemeError as exc:
             raise PlrError(f"{zip_file}: {exc}") from exc
     state = "loaded" if added else "already loaded"
     typer.echo(
-        f"CPC {row.version} {state}: {row.entry_count} entries, sha256 {row.sha256}, from {url}"
+        f"CPC {row.version} {state}: {row.entry_count} entries, sha256 {row.sha256}, "
+        f"from {row.source_url}"
     )
 
 
@@ -376,7 +384,7 @@ def queries_count(
 ) -> None:
     """Count each query over the records stored by the given batches (recorded)."""
     with _session_of(config_file, env_file) as (settings, engine):
-        scheme = _scheme(settings, engine)
+        _, scheme = query_set_scheme(engine, RawStore(settings.object_storage), query_set_id)
         counts = count_locally(engine, query_set_id=query_set_id, batch_ids=batch, scheme=scheme)
     for c in counts:
         extra = f"  (lower bound; not evaluable: {c.undecidable})" if c.undecidable else ""
@@ -399,7 +407,7 @@ def queries_recall(
                 "the scope lists no known_relevant patents confirmed by a person; "
                 "recall cannot be measured"
             )
-        scheme = _scheme(settings, engine)
+        _, scheme = query_set_scheme(engine, RawStore(settings.object_storage), query_set_id)
         result = check_recall(
             engine,
             query_set_id=query_set_id,
@@ -447,7 +455,7 @@ def discover_citations(
             landscape_id=landscape_id,
             query_set_id=query_set_id,
             scope=scope,
-            scheme=_scheme(settings, engine),
+            scheme=query_set_scheme(engine, RawStore(settings.object_storage), query_set_id)[1],
             settings=settings.landscape.citation_expansion,
             progress=lambda line: typer.echo(line, err=True),
         )

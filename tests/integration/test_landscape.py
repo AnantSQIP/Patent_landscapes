@@ -14,7 +14,7 @@ from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
-from patsquire_plr.classification.cpc import CpcScheme
+from patsquire_plr.classification.cpc import CpcScheme, parse_title_list
 from patsquire_plr.classification.store import (
     SchemeNotLoadedError,
     load_cpc_title_list,
@@ -32,7 +32,9 @@ from patsquire_plr.db.models import (
 )
 from patsquire_plr.errors import PlrError
 from patsquire_plr.ingest.rawstore import RawStore
+from patsquire_plr.ingest.runner import run_lookup_batch, start_lookup_batch
 from patsquire_plr.landscape.discovery import DiscoveryError, HopReport, expand_citations
+from patsquire_plr.landscape.queries import QueryError
 from patsquire_plr.landscape.scope import Scope
 from patsquire_plr.landscape.search import check_recall, count_locally, create_query_set
 from patsquire_plr.landscape.store import (
@@ -257,7 +259,7 @@ def test_citation_expansion_counts_and_recall(
     assert hop1.candidates == sum(hop1.excluded.values()) + hop1.requested
     hop2 = hops[2]
     assert hop2.frontier == 2  # only the records the search matches are followed
-    assert hop2.excluded["already_retrieved"] >= 1
+    assert hop2.excluded["already_requested"] >= 1
 
     # Running again continues the same batches instead of starting new ones.
     _, again = expand()
@@ -379,7 +381,9 @@ def test_phase_5_commands(
 
     archive = tmp_path / "CPCTitleList202608.zip"
     archive.write_bytes(title_list_zip())
-    assert "CPC 2026.08 loaded: 154 entries" in plr("cpc", "load", str(archive))
+    assert "CPC 2026.08 loaded: 154 entries" in plr(
+        "cpc", "load", str(archive), "--source-url", "https://example.test/cpc.zip"
+    )
     assert "G06N3/0455\tG06N3/0455\t" in plr("cpc", "check", "G06N3/0455")
     invalid = CliRunner().invoke(app, ["cpc", "check", "G06N3/9", "--config", str(config)])
     assert invalid.exit_code == 1
@@ -417,8 +421,6 @@ def test_phase_5_commands(
     assert v1_id != v2
 
     source = _source(_serve(_pages()))
-    from patsquire_plr.ingest.runner import run_lookup_batch, start_lookup_batch  # noqa: PLC0415
-
     batch = start_lookup_batch(db_engine, source, ["US10000000B2", "US5093563A"])
     run_lookup_batch(db_engine, RawStore(object_storage), source, batch)
     counted = plr("queries", "count", query_set, "--batch", str(batch))
@@ -442,3 +444,74 @@ def _import_first_version(
         actor="system",
     )
     return landscape_id, str(version.id), scheme
+
+
+def test_counts_refuse_other_scheme_versions_and_unknown_batches(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    _, version_id, scheme = _prepared(db_engine, object_storage)
+    _approve(db_engine, "taxonomy_version", version_id)
+    query_set_id = create_query_set(
+        db_engine, taxonomy_version_id=version_id, scope=SCOPE, scheme=scheme
+    )
+    source = _source(_serve(_pages()))
+    batch = start_lookup_batch(db_engine, source, ["US10000000B2"])
+    run_lookup_batch(db_engine, RawStore(object_storage), source, batch)
+
+    other = parse_title_list(title_list_zip({"cpc-section-G_20270101.txt": "G\t\tPHYSICS\n"}))
+    with pytest.raises(QueryError, match=r"generated with CPC 2026\.08; CPC 2027\.01 was given"):
+        count_locally(db_engine, query_set_id=query_set_id, batch_ids=[batch], scheme=other)
+    with pytest.raises(QueryError, match="no such ingest batch"):
+        count_locally(db_engine, query_set_id=query_set_id, batch_ids=[uuid.uuid4()], scheme=scheme)
+    unfinished = start_lookup_batch(db_engine, source, ["US5093563A"])
+    with pytest.raises(QueryError, match="not complete"):
+        check_recall(
+            db_engine,
+            query_set_id=query_set_id,
+            batch_ids=[batch, unfinished],
+            scheme=scheme,
+            known=("US10000000B2",),
+        )
+    with Session(db_engine) as session:
+        assert session.scalar(select(func.count()).select_from(QueryCount)) == 0
+
+
+def test_expansion_refuses_to_reuse_batches_after_settings_change(
+    db_engine: Engine, object_storage: ObjectStorageSettings
+) -> None:
+    landscape_id, version_id, scheme = _prepared(db_engine, object_storage)
+    _approve(db_engine, "taxonomy_version", version_id)
+    query_set_id = create_query_set(
+        db_engine, taxonomy_version_id=version_id, scope=SCOPE, scheme=scheme
+    )
+
+    def expand(cap: int) -> None:
+        expand_citations(
+            db_engine,
+            RawStore(object_storage),
+            _source(_serve(_pages())),
+            landscape_id=landscape_id,
+            query_set_id=query_set_id,
+            scope=SCOPE,
+            scheme=scheme,
+            settings=CitationExpansionSettings(
+                max_hops=1, max_fetch_per_hop=cap, directions=("forward",)
+            ),
+        )
+
+    expand(500)
+    with pytest.raises(DiscoveryError, match="asked for different publications"):
+        expand(1)
+
+
+def test_approvals_need_an_existing_subject(db_engine: Engine) -> None:
+    with pytest.raises(NotFoundError, match="no query_set"):
+        record_approval(
+            db_engine,
+            subject_type="query_set",
+            subject_id=uuid.uuid4(),
+            decision="approved",
+            mode="human",
+            decided_by="Test Reviewer",
+            note=None,
+        )

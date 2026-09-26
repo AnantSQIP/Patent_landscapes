@@ -315,9 +315,32 @@ def test_export_and_reimport_round_trip(scheme: CpcScheme) -> None:
         (("- G06N3/02", "- G06N3/99999"), "invalid CPC codes"),
         (("id: natural_language_processing", "id: neural_network_architectures"), "unique"),
         (("topic:", "topics:"), "edited taxonomy is invalid"),
+        (("- G06N3/02", "- G06"), "is a CPC class"),
+        (("term: neural network", "term: 'neural\\nnetwork'"), "edited taxonomy is invalid"),
     ],
 )
 def test_invalid_edits_fail(scheme: CpcScheme, change: tuple[str, str], message: str) -> None:
     content = _drafted(scheme)
     with pytest.raises(TaxonomyError, match=message):
         content_from_edit(export_yaml(content).replace(*change), scheme, previous=content)
+
+
+def test_synonyms_over_the_limit_are_recorded(scheme: CpcScheme) -> None:
+    many = {
+        **LANGUAGE,
+        "name": "Many",
+        "keywords": [
+            {"term": "natural language", "synonyms": [f"synonym {i:02}" for i in range(14)]}
+        ],
+    }
+    model = ScriptedModel({"taxonomy.draft": [_draft(many, NETWORKS)], "taxonomy.cpc_select": []})
+    model.replies["taxonomy.cpc_select"] = [
+        CpcSelection.model_validate({"picks": []}),
+        CpcSelection.model_validate({"picks": []}),
+    ]
+    content, _ = draft_taxonomy(
+        model, scheme, _scope(), max_segments=4, candidates_per_segment=5, max_cpc_per_segment=3
+    )
+    assert len(content.spec.segments[0].keywords[0].synonyms) == 12
+    dropped = [r.value for r in content.rejected if "over the limit of 12 synonyms" in r.problem]
+    assert dropped == ["synonym 12", "synonym 13"]

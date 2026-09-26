@@ -241,7 +241,9 @@ def _check_sql_safe(query: LogicalQuery) -> None:
 
 
 def _bigquery_pattern(phrases: Sequence[str]) -> str:
-    return r"\b(?:" + "|".join(_phrase_regex(p) for p in phrases) + r")\b"
+    """RE2 has no lookbehind, so boundaries are "start/end or a non-alphanumeric character",
+    the same rule as the local evaluator (terms such as "c++" match too)."""
+    return r"(?:^|[^a-z0-9])(?:" + "|".join(_phrase_regex(p) for p in phrases) + r")(?:$|[^a-z0-9])"
 
 
 def _phrase_regex(phrase: str) -> str:
@@ -260,7 +262,7 @@ class MatchRecord:
     publication: str
     office: str
     publication_date: date | None
-    text: str  # title and abstract
+    texts: tuple[str, ...]  # title and abstract, matched separately (as providers do)
     cpc: tuple[str, ...]
 
 
@@ -278,7 +280,9 @@ class LocalMatcher:
         self._scheme = scheme
         self._pattern = (
             re.compile(
-                r"(?<![\w])(?:" + "|".join(_phrase_regex(p) for p in query.phrases) + r")(?![\w])"
+                r"(?<![a-z0-9])(?:"
+                + "|".join(_phrase_regex(p) for p in query.phrases)
+                + r")(?![a-z0-9])"
             )
             if query.phrases
             else None
@@ -305,9 +309,10 @@ class LocalMatcher:
     def _text(self, record: MatchRecord) -> tuple[bool | None, str | None]:
         if self._pattern is None:
             return True, None
-        if not record.text.strip():
+        texts = [t for t in record.texts if t.strip()]
+        if not texts:
             return None, "no title or abstract text"
-        return self._pattern.search(record.text.lower()) is not None, None
+        return any(self._pattern.search(t.lower()) for t in texts), None
 
     def _codes(self, record: MatchRecord) -> tuple[bool | None, str | None]:
         if not self._query.cpc:

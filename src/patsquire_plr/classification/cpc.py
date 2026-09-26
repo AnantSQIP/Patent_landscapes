@@ -89,6 +89,11 @@ class CpcScheme:
         self._entries = {e.symbol: e for e in entries}
         if len(self._entries) != len(entries):
             raise CpcSchemeError("the title list repeats a symbol")
+        orphans = [
+            e.symbol for e in entries if e.parent is not None and e.parent not in self._entries
+        ]
+        if orphans:
+            raise CpcSchemeError(f"entries whose parent is not in the list: {orphans[:10]}")
         self._children: dict[str, list[str]] = {}
         for entry in entries:
             if entry.parent is not None:
@@ -219,6 +224,21 @@ def _contains(words: tuple[str, ...], phrase: tuple[str, ...]) -> bool:
     )
 
 
+INDEXING_OFFSET = 2000  # CPC "2000-series" indexing codes mirror main group N as 2000 + N
+
+
+def _same_family(parent: str, child: str) -> bool:
+    """A subgroup belongs to its parent's main group, or is a 2000-series indexing code
+    placed under it (the file lists e.g. A01C2001/048 under A01C1/04)."""
+    (p_sub, p_group), (c_sub, c_group) = _main_group(parent), _main_group(child)
+    return p_sub == c_sub and c_group in (p_group, p_group + INDEXING_OFFSET)
+
+
+def _main_group(symbol: str) -> tuple[str, int]:
+    head = symbol.split("/", maxsplit=1)[0]
+    return head[:4], int(head[4:])
+
+
 def parse_title_list(content: bytes) -> CpcScheme:
     """Read ``CPCTitleList<YYYYMM>.zip``. The version is ``YYYY.MM`` from the file dates."""
     try:
@@ -279,6 +299,6 @@ def _entry(where: str, symbol: str, level: str, title: str, stack: list[CpcEntry
     dot_level = int(level)
     if dot_level == 0:
         return CpcEntry(symbol, "main_group", 0, title, symbol[:4])
-    if len(stack) < dot_level or stack[0].symbol[:4] != symbol[:4]:
+    if len(stack) < dot_level or not _same_family(stack[dot_level - 1].symbol, symbol):
         raise CpcSchemeError(f"{where}: no parent group at dot level {dot_level - 1}")
     return CpcEntry(symbol, "subgroup", dot_level, title, stack[dot_level - 1].symbol)

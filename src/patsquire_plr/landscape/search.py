@@ -17,22 +17,28 @@ from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
 from patsquire_plr.classification.cpc import CpcScheme
+from patsquire_plr.classification.store import open_cpc_scheme
 from patsquire_plr.db.audit import append_event
 from patsquire_plr.db.models import (
+    ClassificationScheme,
     DocumentClassification,
+    IngestBatch,
     PatentDocumentRow,
     QueryCount,
     QuerySet,
     RawRecord,
     RecallCheck,
     SearchQuery,
+    TaxonomyVersion,
 )
 from patsquire_plr.domain.patent import normalize_publication_number
+from patsquire_plr.ingest.rawstore import RawStore
 from patsquire_plr.landscape.queries import (
     GENERATOR_VERSION,
     LocalMatcher,
     LogicalQuery,
     MatchRecord,
+    QueryError,
     build_queries,
 )
 from patsquire_plr.landscape.scope import Scope
@@ -94,7 +100,73 @@ def local_queries(engine: Engine, query_set_id: uuid.UUID) -> list[SearchQuery]:
         )
 
 
+def check_scheme(engine: Engine, query_set_id: uuid.UUID, scheme: CpcScheme) -> None:
+    """Queries are evaluated only with the CPC version they were generated with: in another
+    version a code may be split or gone, which would silently change matches."""
+    with Session(engine) as session:
+        query_set = session.get(QuerySet, query_set_id)
+    if query_set is None:
+        raise NotFoundError(f"no query set {query_set_id}")
+    expected = query_set.config.get("cpc_scheme_version")
+    if expected != scheme.version:
+        raise QueryError(
+            f"query set {query_set_id} was generated with CPC {expected}; "
+            f"CPC {scheme.version} was given"
+        )
+
+
+def query_set_scheme(
+    engine: Engine, raw_store: RawStore, query_set_id: uuid.UUID
+) -> tuple[ClassificationScheme, CpcScheme]:
+    """The CPC version the query set's taxonomy was built with."""
+    with Session(engine) as session:
+        scheme_id = session.scalar(
+            select(TaxonomyVersion.classification_scheme_id)
+            .join(QuerySet, QuerySet.taxonomy_version_id == TaxonomyVersion.id)
+            .where(QuerySet.id == query_set_id)
+        )
+    if scheme_id is None:
+        raise NotFoundError(f"no query set {query_set_id}")
+    return open_cpc_scheme(engine, raw_store, scheme_id=scheme_id)
+
+
+def search_matchers(
+    engine: Engine, query_set_id: uuid.UUID, scheme: CpcScheme
+) -> list[LocalMatcher]:
+    """The search itself: each segment's ``combined`` query, or its ``keywords`` query when
+    the segment has no CPC codes."""
+    check_scheme(engine, query_set_id, scheme)
+    queries = local_queries(engine, query_set_id)
+    with_codes = {q.segment_id for q in queries if q.part == "combined"}
+    return [
+        LocalMatcher(LogicalQuery.model_validate(q.logical_query, strict=False), scheme)
+        for q in queries
+        if q.part == "combined" or (q.part == "keywords" and q.segment_id not in with_codes)
+    ]
+
+
 # ------------------------------------------------------------------ stored records as a universe
+
+
+def require_universe(engine: Engine, batch_ids: Sequence[uuid.UUID]) -> list[MatchRecord]:
+    """The records of complete batches. Unknown, unfinished or empty batches are errors, so
+    a mistyped ID can never be recorded as a count of zero."""
+    if not batch_ids:
+        raise QueryError("no batches given")
+    with Session(engine) as session:
+        status = dict(
+            session.execute(
+                select(IngestBatch.id, IngestBatch.status).where(IngestBatch.id.in_(batch_ids))
+            ).all()
+        )
+    if missing := [str(b) for b in batch_ids if b not in status]:
+        raise QueryError(f"no such ingest batch: {missing}")
+    if unfinished := [f"{b} ({status[b]})" for b in batch_ids if status[b] != "complete"]:
+        raise QueryError(f"batches are not complete: {unfinished}")
+    records = load_match_records(engine, batch_ids)
+    if not records:
+        raise QueryError(f"the batches stored no publications: {[str(b) for b in batch_ids]}")
+    return records
 
 
 def universe_name(batch_ids: Sequence[uuid.UUID]) -> str:
@@ -130,7 +202,7 @@ def load_match_records(engine: Engine, batch_ids: Sequence[uuid.UUID]) -> list[M
             publication=publication,
             office=d.publication_country,
             publication_date=d.publication_date,
-            text=" ".join(t for t in (d.title, d.abstract) if t),
+            texts=tuple(t for t in (d.title, d.abstract) if t),
             cpc=tuple(codes.get(d.id, ())),
         )
         for publication, d in sorted(latest.items())
@@ -161,7 +233,8 @@ def count_locally(
     scheme: CpcScheme,
 ) -> list[LocalCount]:
     """Count every query of the set over the batches' records, and record the counts."""
-    records = load_match_records(engine, batch_ids)
+    check_scheme(engine, query_set_id, scheme)
+    records = require_universe(engine, batch_ids)
     universe = universe_name(batch_ids)
     results = []
     for query in local_queries(engine, query_set_id):
@@ -187,7 +260,11 @@ def count_locally(
                 count=r.count,
                 # Records that could not be evaluated might have matched.
                 count_is_lower_bound=bool(r.undecidable),
-                detail={"records": len(records), "undecidable": r.undecidable},
+                detail={
+                    "records": len(records),
+                    "undecidable": r.undecidable,
+                    "cpc_scheme_version": scheme.version,
+                },
             )
             for r in results
         )
@@ -231,29 +308,10 @@ def check_recall(
 ) -> RecallResult:
     """Which confirmed publications the search (the ``combined`` queries, or ``keywords``
     for segments without codes) finds among the stored records. Matching by country and
-    number, so a known ``B2`` is found by its ``A1`` publication too."""
-    records = {(r.office, _number(r.publication)): r for r in load_match_records(engine, batch_ids)}
-    queries = local_queries(engine, query_set_id)
-    with_codes = {q.segment_id for q in queries if q.part == "combined"}
-    search = [
-        LocalMatcher(LogicalQuery.model_validate(q.logical_query, strict=False), scheme)
-        for q in queries
-        if q.part == "combined" or (q.part == "keywords" and q.segment_id not in with_codes)
-    ]
-    found, missed = [], {}
-    for publication in known:
-        record = records.get((publication[:2], _number(publication)))
-        if record is None:
-            missed[publication] = "not among the retrieved records"
-            continue
-        outcomes = [m.evaluate(record) for m in search]
-        if any(o.matched for o in outcomes):
-            found.append(publication)
-        else:
-            reasons = sorted({o.undecidable for o in outcomes if o.undecidable})
-            missed[publication] = "retrieved, but no segment query matches it" + (
-                f" ({'; '.join(reasons)})" if reasons else ""
-            )
+    number, so a known ``B2`` is found by its ``A1`` publication too: every stored kind of
+    the publication is tried."""
+    search = search_matchers(engine, query_set_id, scheme)
+    found, missed = classify_recall(known, require_universe(engine, batch_ids), search)
     result = RecallResult(
         universe=universe_name(batch_ids),
         known=tuple(known),
@@ -283,6 +341,31 @@ def check_recall(
             },
         )
     return result
+
+
+def classify_recall(
+    known: Sequence[str], records: Sequence[MatchRecord], search: Sequence[LocalMatcher]
+) -> tuple[list[str], dict[str, str]]:
+    """(found, missed with reasons). Every stored kind of a known publication is tried."""
+    by_identity: dict[tuple[str, str], list[MatchRecord]] = {}
+    for record in records:
+        by_identity.setdefault((record.office, _number(record.publication)), []).append(record)
+    found: list[str] = []
+    missed: dict[str, str] = {}
+    for publication in known:
+        candidates = by_identity.get((publication[:2], _number(publication)), [])
+        if not candidates:
+            missed[publication] = "not among the retrieved records"
+            continue
+        outcomes = [m.evaluate(r) for r in candidates for m in search]
+        if any(o.matched for o in outcomes):
+            found.append(publication)
+        else:
+            reasons = sorted({o.undecidable for o in outcomes if o.undecidable})
+            missed[publication] = "retrieved, but no segment query matches it" + (
+                f" ({'; '.join(reasons)})" if reasons else ""
+            )
+    return found, missed
 
 
 def _number(publication: str) -> str:

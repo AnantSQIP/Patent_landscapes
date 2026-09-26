@@ -25,6 +25,21 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
   every excluded candidate has a reason.
 - `StructuredResult.cache_key` (provenance of model calls); read-only `batch_summary`.
 - `cli_common` / `cli_landscape` split out of `cli.py`. ADR 0010.
+- **Review fixes:**
+  * counts, recall and discovery are tied to the query set's CPC version;
+  * recall tries every kind of a publication;
+  * one boundary rule for text matching locally and in BigQuery (terms like `c++` match);
+  * title and abstract are matched separately;
+  * discovery refuses to reuse a hop batch built with other settings, and counts links
+    per publication;
+  * unknown, unfinished or empty batches are errors;
+  * approvals are stamped with `clock_timestamp()` under a lock, and the subject must
+    exist;
+  * section- and class-level codes are refused on import;
+  * dropped synonyms are recorded;
+  * control characters are refused in terms;
+  * the CPC source URL is required;
+  * 2000-series indexing codes are checked.
 
 ### Added: user PDF folders
 - `plr ingest folder FOLDER`: publication numbers come from the file names, and a data

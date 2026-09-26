@@ -24,6 +24,7 @@ found. The counts describe this universe, not a whole patent database.
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -53,9 +54,9 @@ from patsquire_plr.ingest.runner import (
     start_lookup_batch,
 )
 from patsquire_plr.ingest.sources import LookupSource
-from patsquire_plr.landscape.queries import LocalMatcher, LogicalQuery
+from patsquire_plr.landscape.queries import LocalMatcher
 from patsquire_plr.landscape.scope import Scope
-from patsquire_plr.landscape.search import load_match_records, local_queries
+from patsquire_plr.landscape.search import load_match_records, search_matchers
 
 
 class DiscoveryError(PlrError):
@@ -68,6 +69,7 @@ class HopReport:
     batch_id: str | None
     frontier: int
     candidates: int
+    frontier_undecidable: int = 0  # records the search could not evaluate; not followed
     excluded: Counter[str] = field(default_factory=Counter)
     requested: int = 0
     outcomes: dict[str, int] = field(default_factory=dict)
@@ -77,6 +79,7 @@ class HopReport:
             "hop": self.hop,
             "batch_id": self.batch_id,
             "frontier": self.frontier,
+            "frontier_undecidable": self.frontier_undecidable,
             "candidates": self.candidates,
             "excluded": dict(sorted(self.excluded.items())),
             "requested": self.requested,
@@ -101,7 +104,7 @@ def expand_citations(
 ) -> tuple[uuid.UUID, list[HopReport]]:
     if not scope.seeds:
         raise DiscoveryError("the scope has no seeds to expand from")
-    search = _search_matchers(engine, query_set_id, scheme)
+    search = search_matchers(engine, query_set_id, scheme)
     hops: list[HopReport] = []
     batch_ids: list[uuid.UUID] = []
     seen = {_identity(s) for s in scope.seeds}
@@ -121,11 +124,15 @@ def expand_citations(
     )
     progress(f"hop 0 (seeds): {report.outcomes}")
     for hop in range(1, settings.max_hops + 1):
-        frontier = _frontier(engine, batch_ids[-1], search if hop > 1 else None)
+        frontier, undecidable = _frontier(engine, batch_ids[-1], search if hop > 1 else None)
         seen |= _retrieved(engine, batch_ids)
         links = _links(engine, frontier, settings.directions)
         hop_report = HopReport(
-            hop=hop, batch_id=None, frontier=len(frontier), candidates=len(links)
+            hop=hop,
+            batch_id=None,
+            frontier=len(frontier),
+            candidates=len(links),
+            frontier_undecidable=undecidable,
         )
         chosen = _choose(links, seen, scope, settings.max_fetch_per_hop, hop_report.excluded)
         if not chosen:
@@ -173,17 +180,29 @@ def _hop_key(landscape_id: uuid.UUID, query_set_id: uuid.UUID, hop: int) -> str:
 def _run_hop(
     engine: Engine, raw_store: RawStore, source: LookupSource, key: str, numbers: list[str]
 ) -> BatchReport:
-    """Continue this hop's batch if an earlier run created it; otherwise start it."""
+    """Continue this hop's batch if an earlier run created it; otherwise start it. A batch
+    is reused only if it asked for exactly the same publications, so changed settings or
+    seeds can never be recorded against an old batch."""
     with Session(engine) as session:
-        existing = session.scalars(
-            select(IngestBatch.id).where(IngestBatch.query_text.contains(f'"{key}"'))
+        existing = session.execute(
+            select(IngestBatch.id, IngestBatch.query_text).where(
+                IngestBatch.query_text.contains(f'"{key}"', autoescape=True)
+            )
         ).all()
     if len(existing) > 1:
-        raise DiscoveryError(f"more than one batch for {key}: {existing}")
-    if existing and batch_summary(engine, existing[0]).status == "complete":
-        return batch_summary(engine, existing[0])
+        raise DiscoveryError(f"more than one batch for {key}: {[r.id for r in existing]}")
+    if existing:
+        stored_keys = json.loads(existing[0].query_text or "{}").get("keys", [])
+        if {_identity(k) for k in stored_keys} != {_identity(n) for n in numbers}:
+            raise DiscoveryError(
+                f"{key}: batch {existing[0].id} asked for different publications than this run "
+                "would (seeds or expansion settings changed); generate a new query set to "
+                "expand again"
+            )
+        if batch_summary(engine, existing[0].id).status == "complete":
+            return batch_summary(engine, existing[0].id)
     batch_id = (
-        existing[0]
+        existing[0].id
         if existing
         else start_lookup_batch(
             engine, source, numbers, provenance={"type": "citation_expansion", "key": key}
@@ -198,23 +217,11 @@ def _run_hop(
     return report
 
 
-def _search_matchers(
-    engine: Engine, query_set_id: uuid.UUID, scheme: CpcScheme
-) -> list[LocalMatcher]:
-    queries = local_queries(engine, query_set_id)
-    with_codes = {q.segment_id for q in queries if q.part == "combined"}
-    return [
-        LocalMatcher(LogicalQuery.model_validate(q.logical_query, strict=False), scheme)
-        for q in queries
-        if q.part == "combined" or (q.part == "keywords" and q.segment_id not in with_codes)
-    ]
-
-
 def _frontier(
     engine: Engine, batch_id: uuid.UUID, search: Sequence[LocalMatcher] | None
-) -> list[uuid.UUID]:
-    """Documents stored by the batch; after hop 1 only those the search matches."""
-    records = {r.publication: r for r in load_match_records(engine, [batch_id])}
+) -> tuple[list[uuid.UUID], int]:
+    """Documents stored by the batch; after hop 1 only those the search matches. Also
+    returns how many records the search could not evaluate (they are not followed)."""
     with Session(engine) as session:
         rows = session.execute(
             select(PatentDocumentRow)
@@ -226,79 +233,83 @@ def _frontier(
             for d in rows
         }
     if search is None:
-        return sorted(documents.values())
-    return sorted(
-        documents[p]
-        for p, record in records.items()
-        if p in documents and any(m.evaluate(record).matched for m in search)
-    )
+        return sorted(documents.values()), 0
+    matched, undecidable = [], 0
+    for record in load_match_records(engine, [batch_id]):
+        outcomes = [m.evaluate(record) for m in search]
+        if any(o.matched for o in outcomes):
+            matched.append(documents[record.publication])
+        elif any(o.undecidable for o in outcomes):
+            undecidable += 1
+    return sorted(matched), undecidable
 
 
 def _links(
     engine: Engine, frontier: Sequence[uuid.UUID], directions: Sequence[str]
-) -> Counter[str]:
-    """Publication -> number of frontier documents linking to it."""
-    links: Counter[str] = Counter()
+) -> dict[tuple[str, str], tuple[int, str]]:
+    """Publication (country, number) -> (frontier documents linking to it, the number to
+    request). Kinds of one publication (A1, B2) count as one; the lowest spelling is
+    requested, so the choice is deterministic."""
+    linked: dict[tuple[str, str], set[uuid.UUID]] = {}
+    spellings: dict[tuple[str, str], str] = {}
+    unparseable: set[str] = set()
+
+    def add(document_id: uuid.UUID, number: str | None) -> None:
+        if number is None:
+            return
+        try:
+            identity = _identity(number)
+        except NormalizationError:
+            unparseable.add(number)
+            return
+        linked.setdefault(identity, set()).add(document_id)
+        spellings[identity] = min(spellings.get(identity, number), number)
+
     with Session(engine) as session:
         for chunk in (frontier[i : i + 1000] for i in range(0, len(frontier), 1000)):
             if "backward" in directions:
-                for _, number in session.execute(
-                    select(DocumentCitation.document_id, DocumentCitation.publication_number)
-                    .where(
+                for document_id, number in session.execute(
+                    select(DocumentCitation.document_id, DocumentCitation.publication_number).where(
                         DocumentCitation.document_id.in_(chunk),
                         DocumentCitation.kind == "patent",
                     )
-                    .distinct()
                 ):
-                    if number is not None:
-                        links[number] += 1
+                    add(document_id, number)
             if "forward" in directions:
-                for _, number in session.execute(
+                for document_id, number in session.execute(
                     select(
                         DocumentForwardCitation.document_id,
                         DocumentForwardCitation.citing_publication_number,
-                    )
-                    .where(DocumentForwardCitation.document_id.in_(chunk))
-                    .distinct()
+                    ).where(DocumentForwardCitation.document_id.in_(chunk))
                 ):
-                    links[number] += 1
-    return links
+                    add(document_id, number)
+    if unparseable:  # stored numbers are normalised, so this would be a data error
+        raise DiscoveryError(f"stored citations with unparseable numbers: {sorted(unparseable)}")
+    return {identity: (len(docs), spellings[identity]) for identity, docs in linked.items()}
 
 
 def _choose(
-    links: Counter[str],
+    links: dict[tuple[str, str], tuple[int, str]],
     seen: set[tuple[str, str]],
     scope: Scope,
     cap: int,
     excluded: Counter[str],
 ) -> list[str]:
+    """Ranked by links (descending), then number. ``already_requested`` includes
+    publications requested earlier that were not found."""
     eligible = []
-    for number, count in links.items():
-        try:
-            identity = _identity(number)
-        except NormalizationError:
-            excluded["unparseable_number"] += 1
-            continue
+    for identity, (count, number) in links.items():
         if identity in seen:
-            excluded["already_retrieved"] += 1
+            excluded["already_requested"] += 1
         elif scope.countries and identity[0] not in scope.countries:
             excluded["office_out_of_scope"] += 1
         else:
-            eligible.append((-count, number, identity))
+            eligible.append((-count, number))
     eligible.sort()
-    chosen: list[str] = []
-    picked: set[tuple[str, str]] = set()
-    for _, number, identity in eligible:
-        if identity in picked:  # two kinds of one publication: one fetch
-            excluded["same_publication_other_kind"] = (
-                excluded.get("same_publication_other_kind", 0) + 1
-            )
-        elif len(chosen) >= cap:
-            excluded["over_cap"] += 1
-        else:
-            chosen.append(number)
-            picked.add(identity)
-    return chosen
+    excluded["over_cap"] += max(0, len(eligible) - cap)
+    if not excluded["over_cap"]:
+        del excluded["over_cap"]
+    return [number for _, number in eligible[:cap]]
 
 
 def _identity(number: str) -> tuple[str, str]:

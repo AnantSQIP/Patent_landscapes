@@ -36,7 +36,7 @@ from patsquire_plr.landscape.scope import Scope
 SEGMENT_ID = r"^[a-z][a-z0-9_]{0,39}$"
 # Search terms are rendered into several query languages, so characters that are syntax in
 # any of them (quotes, brackets, wildcards, operators) are not allowed in a term.
-TERM = r"^[^\"'\\()\[\]{}*?#=<>|~^:;,]+$"
+TERM = r"^[^\"'\\()\[\]{}*?#=<>|~^:;,\n\r\t]+$"
 
 
 class StructuredModel(Protocol):
@@ -340,7 +340,9 @@ def _segment_from_draft(
         term = keyword.term.strip()
         synonyms = [s.strip() for s in keyword.synonyms if s.strip()]
         synonyms = [s for s in dict.fromkeys(synonyms) if s.casefold() != term.casefold()]
-        synonyms = [s for s in synonyms if usable(s)][:MAX_SYNONYMS]
+        synonyms = [s for s in synonyms if usable(s)]
+        bad += [(s, f"over the limit of {MAX_SYNONYMS} synonyms") for s in synonyms[MAX_SYNONYMS:]]
+        synonyms = synonyms[:MAX_SYNONYMS]
         if usable(term):
             groups.append(KeywordGroup(term=term, synonyms=tuple(synonyms)))
     try:
@@ -414,8 +416,14 @@ def content_from_edit(
         resolved = []
         for code in segment.cpc:
             check = scheme.check(code)
-            if check.symbol is None or check.title_path is None:
+            entry = scheme.get(check.symbol) if check.symbol else None
+            if check.symbol is None or check.title_path is None or entry is None:
                 problems.append(f"{segment.id}: {check.problem}")
+            elif entry.kind in ("section", "class"):
+                problems.append(
+                    f"{segment.id}: {check.symbol} is a CPC {entry.kind}; use a subclass or "
+                    "group, since a whole section or class makes queries too broad to run"
+                )
             else:
                 resolved.append(ResolvedCpc(symbol=check.symbol, title_path=check.title_path))
         chosen[segment.id] = tuple(resolved)

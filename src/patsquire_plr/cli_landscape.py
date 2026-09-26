@@ -82,7 +82,7 @@ def register(app: typer.Typer) -> None:
 
 
 @contextmanager
-def _session_of(config_file: Path, env_file: Path | None) -> Iterator[tuple[Settings, Engine]]:
+def session_of(config_file: Path, env_file: Path | None) -> Iterator[tuple[Settings, Engine]]:
     """Settings and an engine; any PlrError becomes a message and exit code 1."""
     settings = load_cli_settings(config_file, env_file)
     engine = create_db_engine(settings.database)
@@ -118,7 +118,7 @@ def cpc_load(
 ) -> None:
     """Store an official CPC title list and record its version and hash."""
     content = zip_file.read_bytes()
-    with _session_of(config_file, env_file) as (settings, engine):
+    with session_of(config_file, env_file) as (settings, engine):
         try:
             row, added = load_cpc_title_list(
                 engine, RawStore(settings.object_storage), content, source_url=source_url
@@ -139,7 +139,7 @@ def cpc_check(
     env_file: EnvFileOption = None,
 ) -> None:
     """Check codes against the newest loaded CPC version. Exits 1 if any is invalid."""
-    with _session_of(config_file, env_file) as (settings, engine):
+    with session_of(config_file, env_file) as (settings, engine):
         scheme = _scheme(settings, engine)
     checks = [scheme.check(c) for c in codes]
     for c in checks:
@@ -159,7 +159,7 @@ def cpc_search(
     env_file: EnvFileOption = None,
 ) -> None:
     """Search CPC titles (whole words, case-insensitive)."""
-    with _session_of(config_file, env_file) as (settings, engine):
+    with session_of(config_file, env_file) as (settings, engine):
         scheme = _scheme(settings, engine)
     for match in scheme.search(terms, within=within or (), limit=limit):
         typer.echo(f"{match.symbol}\t{', '.join(match.matched_terms)}\t{match.title_path}")
@@ -176,7 +176,7 @@ def landscape_create(
     env_file: EnvFileOption = None,
 ) -> None:
     """Record a new landscape with its scope. Prints the landscape ID."""
-    with _session_of(config_file, env_file) as (_, engine):
+    with session_of(config_file, env_file) as (_, engine):
         scope = load_scope(scope_file)
         landscape_id = create_landscape(engine, name=name, scope=scope)
     typer.echo(str(landscape_id))
@@ -192,7 +192,7 @@ def taxonomy_draft(
     env_file: EnvFileOption = None,
 ) -> None:
     """Draft a taxonomy with the reasoner model and official CPC entries."""
-    with _session_of(config_file, env_file) as (settings, engine):
+    with session_of(config_file, env_file) as (settings, engine):
         _, scope = get_scope(engine, landscape_id)
         scheme_row, scheme = open_cpc_scheme(engine, RawStore(settings.object_storage))
         gateway = ModelGateway(
@@ -250,7 +250,7 @@ def taxonomy_show(
     env_file: EnvFileOption = None,
 ) -> None:
     """Print the newest (or a given) taxonomy version and its approval state."""
-    with _session_of(config_file, env_file) as (_, engine):
+    with session_of(config_file, env_file) as (_, engine):
         row, content = get_taxonomy(engine, version_id=version_id, landscape_id=landscape_id)
         decision = latest_decision(engine, "taxonomy_version", row.id)
     state = "not decided" if decision is None else f"{decision.decision} by {decision.decided_by}"
@@ -271,7 +271,7 @@ def taxonomy_import(
 ) -> None:
     """Store an edited taxonomy as a new version (CPC codes are checked). The first version
     of a landscape may also be written by a person, without an AI draft."""
-    with _session_of(config_file, env_file) as (settings, engine):
+    with session_of(config_file, env_file) as (settings, engine):
         get_scope(engine, landscape_id)  # the landscape must exist
         text = edited_file.read_text(encoding="utf-8")
         try:
@@ -326,7 +326,7 @@ def taxonomy_approve(
     env_file: EnvFileOption = None,
 ) -> None:
     """Record a person's approval (or rejection) of a taxonomy version."""
-    with _session_of(config_file, env_file) as (_, engine):
+    with session_of(config_file, env_file) as (_, engine):
         get_taxonomy(engine, version_id=version_id)  # must exist
         record_approval(
             engine,
@@ -350,7 +350,7 @@ def queries_generate(
     env_file: EnvFileOption = None,
 ) -> None:
     """Generate the query set for an approved taxonomy version. Prints its ID."""
-    with _session_of(config_file, env_file) as (settings, engine):
+    with session_of(config_file, env_file) as (settings, engine):
         row, _ = get_taxonomy(engine, version_id=version_id)
         _, scope = get_scope(engine, row.landscape_id)
         scheme = _scheme(settings, engine, row.classification_scheme_id)
@@ -372,7 +372,7 @@ def queries_approve(
     env_file: EnvFileOption = None,
 ) -> None:
     """Record a person's approval (or rejection) of a query set."""
-    with _session_of(config_file, env_file) as (_, engine):
+    with session_of(config_file, env_file) as (_, engine):
         _query_set_landscape(engine, query_set_id)  # must exist
         record_approval(
             engine,
@@ -396,7 +396,7 @@ def queries_show(
     env_file: EnvFileOption = None,
 ) -> None:
     """Print the queries of a set."""
-    with _session_of(config_file, env_file) as (_, engine), Session(engine) as session:
+    with session_of(config_file, env_file) as (_, engine), Session(engine) as session:
         query = select(SearchQuery).where(SearchQuery.query_set_id == query_set_id)
         if provider:
             query = query.where(SearchQuery.provider == provider)
@@ -418,7 +418,7 @@ def queries_count(
     env_file: EnvFileOption = None,
 ) -> None:
     """Count each query over the records stored by the given batches (recorded)."""
-    with _session_of(config_file, env_file) as (settings, engine):
+    with session_of(config_file, env_file) as (settings, engine):
         _, scheme = query_set_scheme(engine, RawStore(settings.object_storage), query_set_id)
         counts = count_locally(engine, query_set_id=query_set_id, batch_ids=batch, scheme=scheme)
     for c in counts:
@@ -434,7 +434,7 @@ def queries_recall(
     env_file: EnvFileOption = None,
 ) -> None:
     """Check which user-confirmed patents (scope ``known_relevant``) the search finds."""
-    with _session_of(config_file, env_file) as (settings, engine):
+    with session_of(config_file, env_file) as (settings, engine):
         query_set_row = _query_set_landscape(engine, query_set_id)
         _, scope = get_scope(engine, query_set_row)
         if not scope.known_relevant:
@@ -477,7 +477,7 @@ def discover_citations(
     env_file: EnvFileOption = None,
 ) -> None:
     """Expand from the scope's seeds along citations; re-running resumes the same batches."""
-    with _session_of(config_file, env_file) as (settings, engine):
+    with session_of(config_file, env_file) as (settings, engine):
         if source not in settings.data_sources:
             raise PlrError(f"unknown data source {source!r}")
         landscape_id = _query_set_landscape(engine, query_set_id)

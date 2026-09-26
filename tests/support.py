@@ -49,6 +49,22 @@ def base_config() -> dict[str, dict[str, object]]:
                 "max_retries": 1,
             }
         },
+        "classification": {
+            "seed": 7,
+            "relevance": {
+                "high_threshold": "0.5500",
+                "low_threshold": "0.3500",
+                "qa_sample_rate": "0.1000",
+                "min_judge_confidence": "medium",
+            },
+            "segments": {"embedding_threshold": "0.4500"},
+            "evaluation": {
+                "min_gold_labels": 100,
+                "min_precision": "0.8000",
+                "min_recall": "0.8000",
+                "min_segment_f1": "0.7000",
+            },
+        },
         "landscape": {
             "approval_mode": "human",
             "max_segments": 8,

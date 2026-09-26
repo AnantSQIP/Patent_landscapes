@@ -260,6 +260,45 @@ class LandscapeSettings(_Section):
     citation_expansion: CitationExpansionSettings
 
 
+Unit = Annotated[Decimal, Field(ge=0, le=1, max_digits=5, decimal_places=4)]
+
+
+class RelevanceSettings(_Section):
+    """Embedding bands and the model judge (ADR 0011). Scores are cosine similarities
+    rounded to 4 decimals."""
+
+    high_threshold: Unit = Field(description="score >= this: relevant by embedding")
+    low_threshold: Unit = Field(description="score <= this: not relevant by embedding")
+    qa_sample_rate: Unit = Field(description="share of confident families also sent to the judge")
+    min_judge_confidence: Literal["medium", "high"]
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.low_threshold >= self.high_threshold:
+            raise ValueError("low_threshold must be below high_threshold")
+        return self
+
+
+class SegmentSettings(_Section):
+    embedding_threshold: Unit = Field(description="similarity >= this: the embedding votes yes")
+
+
+class EvaluationSettings(_Section):
+    """Minimums a run must meet on the human-labelled gold set to be publishable."""
+
+    min_gold_labels: int = Field(ge=1)
+    min_precision: Unit
+    min_recall: Unit
+    min_segment_f1: Unit
+
+
+class ClassificationSettings(_Section):
+    seed: int = Field(ge=0, description="fixes which families go into samples")
+    relevance: RelevanceSettings
+    segments: SegmentSettings
+    evaluation: EvaluationSettings
+
+
 class Settings(_Section):
     app: AppSettings
     database: DatabaseSettings
@@ -268,6 +307,7 @@ class Settings(_Section):
     models: ModelsSettings
     data_sources: dict[Annotated[str, Field(pattern=_SOURCE_ID)], DataSourceSettings]
     landscape: LandscapeSettings
+    classification: ClassificationSettings
 
 
 def secret_field_paths(

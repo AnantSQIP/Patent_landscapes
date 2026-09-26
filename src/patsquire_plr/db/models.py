@@ -12,6 +12,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -72,6 +73,13 @@ APPEND_ONLY_TABLES: tuple[str, ...] = (
     "query_count",
     "discovery_run",
     "recall_check",
+    "classification_run",
+    "family_text",
+    "text_embedding",
+    "relevance_decision",
+    "segment_decision",
+    "gold_label",
+    "evaluation",
 )
 
 
@@ -709,3 +717,123 @@ class RecallCheck(Base):
     known: Mapped[list[object]]
     found: Mapped[list[object]]
     missed: Mapped[dict[str, object]]
+
+
+# ------------------------------------------------------------------ Phase 6: relevance and
+# segment classification (ADR 0011). A run and all its decisions are written in one
+# transaction; human labels (gold set) are kept per dataset family, independent of runs.
+
+SCORE = Numeric(5, 4)  # cosine similarity rounded to 4 decimals (exact, reproducible)
+
+
+class ClassificationRun(Base):
+    """APPEND-ONLY. One classification of a dataset's families against a query set's taxonomy."""
+
+    __tablename__ = "classification_run"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    created_at: Mapped[datetime] = _created_at()
+    dataset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dataset.id"))
+    query_set_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("query_set.id"))
+    taxonomy_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("taxonomy_version.id"))
+    config: Mapped[dict[str, object]]
+    summary: Mapped[dict[str, object]]
+
+
+class FamilyText(Base):
+    """APPEND-ONLY. The text a family was judged on: its representative publication."""
+
+    __tablename__ = "family_text"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("classification_run.id"), primary_key=True)
+    family_key: Mapped[str] = mapped_column(primary_key=True)
+    publication: Mapped[str | None]
+    language: Mapped[str | None]
+    title: Mapped[str | None]
+    abstract: Mapped[str | None]
+    text_sha256: Mapped[str | None] = mapped_column(String(64))
+
+
+class TextEmbedding(Base):
+    """APPEND-ONLY. One embedding per (model, text), reused across runs."""
+
+    __tablename__ = "text_embedding"
+
+    model: Mapped[str] = mapped_column(primary_key=True)
+    text_sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dims: Mapped[int] = mapped_column(Integer)
+    embedding: Mapped[list[float]] = mapped_column(Vector())
+    created_at: Mapped[datetime] = _created_at()
+
+
+class RelevanceDecision(Base):
+    """APPEND-ONLY. Whether a family belongs to the landscape, and why."""
+
+    __tablename__ = "relevance_decision"
+    __table_args__ = (
+        CheckConstraint("band IN ('high', 'middle', 'low', 'no_text')", name="band"),
+        CheckConstraint(
+            "final IN ('relevant', 'not_relevant', 'uncertain', 'no_text')", name="final"
+        ),
+    )
+
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("classification_run.id"), primary_key=True)
+    family_key: Mapped[str] = mapped_column(primary_key=True)
+    score: Mapped[Decimal | None] = mapped_column(SCORE)
+    band: Mapped[str]
+    judged: Mapped[bool] = mapped_column(Boolean)
+    judge: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    final: Mapped[str]
+    reason: Mapped[str]
+
+
+class SegmentDecision(Base):
+    """APPEND-ONLY. Whether a relevant family belongs to a segment (multi-label)."""
+
+    __tablename__ = "segment_decision"
+    __table_args__ = (
+        CheckConstraint("final IN ('assigned', 'not_assigned', 'uncertain')", name="final"),
+    )
+
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("classification_run.id"), primary_key=True)
+    family_key: Mapped[str] = mapped_column(primary_key=True)
+    segment_id: Mapped[str] = mapped_column(primary_key=True)
+    score: Mapped[Decimal] = mapped_column(SCORE)
+    embedding_vote: Mapped[bool] = mapped_column(Boolean)
+    judge_vote: Mapped[bool | None] = mapped_column(Boolean)
+    judge: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    final: Mapped[str]
+    reason: Mapped[str]
+
+
+class GoldLabel(Base):
+    """APPEND-ONLY. A person's label for a family (the gold set); the newest per labeller
+    and task counts."""
+
+    __tablename__ = "gold_label"
+    __table_args__ = (
+        CheckConstraint("task = 'relevance' OR task LIKE 'segment:%'", name="task"),
+        Index("ix_gold_label_dataset_family", "dataset_id", "family_key"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    created_at: Mapped[datetime] = _created_at()
+    dataset_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dataset.id"))
+    family_key: Mapped[str]
+    task: Mapped[str]
+    label: Mapped[bool] = mapped_column(Boolean)
+    labeller: Mapped[str]
+    source_sha256: Mapped[str] = mapped_column(String(64))
+
+
+class Evaluation(Base):
+    """APPEND-ONLY. Measured accuracy of a run against the gold set (Layer 4)."""
+
+    __tablename__ = "evaluation"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    created_at: Mapped[datetime] = _created_at()
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("classification_run.id"))
+    results: Mapped[dict[str, object]]
+    publishable: Mapped[bool] = mapped_column(Boolean)
+    problems: Mapped[list[object]]

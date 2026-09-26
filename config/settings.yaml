@@ -75,3 +75,23 @@ landscape:
     max_hops: 2
     max_fetch_per_hop: 600      # at 20 requests/minute, about 30 minutes per full hop
     directions: [backward, forward]
+
+# Relevance filtering and segment classification (Phase 6, ADR 0011). Thresholds are exact
+# decimals; scores are cosine similarities of the embedding model, rounded to 4 places.
+classification:
+  seed: 7
+  relevance:
+    # Calibrated 2026-09-26 (all-minilm, LLM taxonomy): the 9 owner-confirmed LLM patents
+    # scored 0.4505-0.6774; the owner's 1,131 unrelated patents: median 0.1894, 99th
+    # percentile 0.4080, maximum 0.4955. Nothing unrelated reached 0.50; all 9 are above 0.35.
+    high_threshold: "0.5000"
+    low_threshold: "0.3500"
+    qa_sample_rate: "0.1000"
+    min_judge_confidence: medium
+  segments:
+    embedding_threshold: "0.4500"
+  evaluation:
+    min_gold_labels: 100
+    min_precision: "0.8000"
+    min_recall: "0.8000"
+    min_segment_f1: "0.7000"

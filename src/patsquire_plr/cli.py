@@ -9,7 +9,7 @@ from typing import Annotated
 
 import typer
 
-from patsquire_plr import cli_landscape
+from patsquire_plr import cli_classify, cli_landscape
 from patsquire_plr.cli_common import (
     DEFAULT_CONFIG_FILE,
     ConfigFileOption,
@@ -70,6 +70,7 @@ app.add_typer(ingest_app, name="ingest")
 dataset_app = typer.Typer(no_args_is_help=True, help="Build and review analysis datasets.")
 app.add_typer(dataset_app, name="dataset")
 cli_landscape.register(app)
+cli_classify.register(app)
 DEFAULT_ALIASES = Path("config/applicant_aliases.yaml")
 
 TemplateOption = Annotated[Path, typer.Option("--template", help="Template specification YAML.")]

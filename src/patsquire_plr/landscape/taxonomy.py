@@ -24,9 +24,9 @@ from collections.abc import Mapping
 from typing import Annotated, Literal, Protocol, Self
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from patsquire_plr.classification.cpc import CpcScheme
+from patsquire_plr.classification.cpc import CpcScheme, search_term_problems
 from patsquire_plr.config import ModelRole
 from patsquire_plr.errors import PlrError
 from patsquire_plr.gateway.gateway import StructuredResult
@@ -65,7 +65,29 @@ class _Strict(BaseModel):
 
 
 MIN_TERM_LENGTH, MAX_TERM_LENGTH, MAX_SYNONYMS = 2, 80, 12
-Term = Annotated[str, Field(min_length=MIN_TERM_LENGTH, max_length=MAX_TERM_LENGTH, pattern=TERM)]
+
+
+def term_problem(term: str) -> str | None:
+    """Why ``term`` cannot be a search term, or None. A term must have no surrounding
+    spaces, contain a letter or digit, and avoid query-syntax characters."""
+    if term != term.strip():
+        return "has leading or trailing spaces"
+    if not MIN_TERM_LENGTH <= len(term) <= MAX_TERM_LENGTH:
+        return f"must be {MIN_TERM_LENGTH} to {MAX_TERM_LENGTH} characters"
+    if not re.search(r"[^\W_]", term):
+        return "has no letters or digits"
+    if not re.fullmatch(TERM, term):
+        return "contains query-syntax characters (quotes, brackets, wildcards, operators)"
+    return None
+
+
+def _check_term(term: str) -> str:
+    if (problem := term_problem(term)) is not None:
+        raise ValueError(f"search term {term!r} {problem}")
+    return term
+
+
+Term = Annotated[str, AfterValidator(_check_term)]
 
 
 class KeywordGroup(_Strict):
@@ -117,7 +139,8 @@ class Rejected(_Strict):
     """Something the model proposed that was not accepted, kept with the reason."""
 
     segment_id: str
-    kind: Literal["segment", "cpc", "term"]
+    # cpc_search: a term not used for the CPC title search, or a segment with no candidates
+    kind: Literal["segment", "cpc", "term", "cpc_search"]
     value: str
     problem: str
 
@@ -275,10 +298,29 @@ def draft_taxonomy(
         rejected += [
             Rejected(segment_id=spec.id, kind="term", value=t, problem=p) for t, p in bad_terms
         ]
+        unsearchable = search_term_problems(spec.terms())
+        rejected += [
+            Rejected(
+                segment_id=spec.id,
+                kind="cpc_search",
+                value=term,
+                problem=f"not used for the CPC title search: {problem}",
+            )
+            for term, problem in unsearchable.items()
+        ]
         candidates = [
             ResolvedCpc(symbol=m.symbol, title_path=m.title_path)
             for m in scheme.search(spec.terms(), within=within, limit=candidates_per_segment)
         ]
+        if not candidates:
+            rejected.append(
+                Rejected(
+                    segment_id=spec.id,
+                    kind="cpc_search",
+                    value=spec.name,
+                    problem="no official CPC entry matched the segment's terms; no codes chosen",
+                )
+            )
         picks: list[CpcPick] = []
         if candidates:
             selection = gateway.structured(
@@ -330,10 +372,10 @@ def _segment_from_draft(
     bad: list[tuple[str, str]] = []
 
     def usable(term: str) -> bool:
-        ok = MIN_TERM_LENGTH <= len(term) <= MAX_TERM_LENGTH and re.fullmatch(TERM, term)
-        if not ok:
-            bad.append((term, "not usable as a search term (length or query syntax characters)"))
-        return bool(ok)
+        problem = term_problem(term)
+        if problem is not None:
+            bad.append((term, f"not usable as a search term: {problem}"))
+        return problem is None
 
     groups = []
     for keyword in drafted.keywords:
@@ -382,11 +424,13 @@ def _accept_picks(
 # ------------------------------------------------------------------ editing by a person
 
 
-def export_yaml(content: TaxonomyContent) -> str:
-    """The editable part as YAML, with suggestions listed in a comment block."""
+def export_yaml(content: TaxonomyContent, *, base_version: str | None = None) -> str:
+    """The editable part as YAML, with suggestions listed in a comment block. The version it
+    was made from is written as ``# base_version``, so an import can refuse a stale edit."""
     lines = [
         "# Taxonomy for editing. Change segments, keywords and CPC codes, then import this",
         f"# file as a new version. CPC codes must exist in CPC {content.cpc_scheme_version}.",
+        *([f"# base_version: {base_version}"] if base_version else []),
         "",
         yaml.safe_dump(content.spec.model_dump(mode="json"), sort_keys=False, allow_unicode=True),
     ]
@@ -400,12 +444,46 @@ def export_yaml(content: TaxonomyContent) -> str:
     return "\n".join(lines) + "\n"
 
 
+BASE_VERSION_LINE = re.compile(r"^# base_version: (?P<id>[0-9a-f-]{36})$", re.MULTILINE)
+
+
+def base_version_of(text: str) -> str | None:
+    """The taxonomy version an exported file was made from (its ``# base_version`` line)."""
+    match = BASE_VERSION_LINE.search(text)
+    return match["id"] if match else None
+
+
+LIST_FIELDS = ("includes", "excludes", "keywords", "cpc")
+
+
+def _empty_lists_as_lists(raw: object) -> object:
+    """In YAML, a key whose list items were all deleted (``cpc:``) reads as null; for the
+    list fields of a segment and for synonyms that means an empty list."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("segments"), list):
+        return raw
+    for segment in raw["segments"]:
+        if not isinstance(segment, dict):
+            continue
+        for name in LIST_FIELDS:
+            if name in segment and segment[name] is None:
+                segment[name] = []
+        for keyword in segment.get("keywords") or []:
+            if isinstance(keyword, dict) and keyword.get("synonyms", ()) is None:
+                keyword["synonyms"] = []
+    return raw
+
+
 def content_from_edit(
     text: str, scheme: CpcScheme, *, previous: TaxonomyContent
 ) -> TaxonomyContent:
-    """A person's edited YAML as a new version's content. Invalid CPC codes fail the import."""
+    """A person's edited YAML as a new version's content.
+
+    Invalid CPC codes fail the import. Codes that normalise to the same symbol count once.
+    Codes the person removed go back to the suggestions. Suggestions are kept only if they
+    exist in ``scheme``, and the record of what was rejected earlier is carried forward.
+    """
     try:
-        raw = yaml.safe_load(text)
+        raw = _empty_lists_as_lists(yaml.safe_load(text))
         spec = TaxonomySpec.model_validate(raw, strict=False)
     except (yaml.YAMLError, ValidationError) as exc:
         raise TaxonomyError(f"edited taxonomy is invalid: {exc}") from exc
@@ -413,7 +491,7 @@ def content_from_edit(
     chosen: dict[str, tuple[ResolvedCpc, ...]] = {}
     segments = []
     for segment in spec.segments:
-        resolved = []
+        resolved: dict[str, ResolvedCpc] = {}
         for code in segment.cpc:
             check = scheme.check(code)
             entry = scheme.get(check.symbol) if check.symbol else None
@@ -425,18 +503,32 @@ def content_from_edit(
                     "group, since a whole section or class makes queries too broad to run"
                 )
             else:
-                resolved.append(ResolvedCpc(symbol=check.symbol, title_path=check.title_path))
-        chosen[segment.id] = tuple(resolved)
-        segments.append(segment.model_copy(update={"cpc": tuple(r.symbol for r in resolved)}))
+                resolved.setdefault(
+                    check.symbol, ResolvedCpc(symbol=check.symbol, title_path=check.title_path)
+                )
+        chosen[segment.id] = tuple(resolved.values())
+        segments.append(segment.model_copy(update={"cpc": tuple(resolved)}))
     if problems:
         raise TaxonomyError("edited taxonomy has invalid CPC codes: " + "; ".join(problems))
-    kept = {sid: previous.suggestions.get(sid, ()) for sid in chosen}
+    suggestions = {}
+    for sid, codes in chosen.items():
+        pool = [*previous.suggestions.get(sid, ()), *previous.cpc.get(sid, ())]
+        kept: dict[str, ResolvedCpc] = {}
+        for candidate in pool:
+            check = scheme.check(candidate.symbol)
+            if check.symbol is not None and check.title_path is not None:
+                kept.setdefault(
+                    check.symbol, ResolvedCpc(symbol=check.symbol, title_path=check.title_path)
+                )
+        suggestions[sid] = tuple(
+            c for c in kept.values() if c.symbol not in {x.symbol for x in codes}
+        )
     return TaxonomyContent(
         spec=spec.model_copy(update={"segments": tuple(segments)}),
         cpc_scheme_version=scheme.version,
         cpc=chosen,
-        suggestions={sid: tuple(c for c in kept[sid] if c not in chosen[sid]) for sid in chosen},
-        rejected=(),
+        suggestions=suggestions,
+        rejected=previous.rejected,
     )
 
 

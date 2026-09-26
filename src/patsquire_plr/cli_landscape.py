@@ -48,7 +48,12 @@ from patsquire_plr.landscape.store import (
     record_approval,
     require_approved,
 )
-from patsquire_plr.landscape.taxonomy import content_from_edit, draft_taxonomy, export_yaml
+from patsquire_plr.landscape.taxonomy import (
+    base_version_of,
+    content_from_edit,
+    draft_taxonomy,
+    export_yaml,
+)
 
 CPC_TITLE_LIST_URL = (
     "https://www.cooperativepatentclassification.org/sites/default/files/cpc/bulk/"
@@ -214,7 +219,7 @@ def taxonomy_draft(
         )
         _auto_approve(settings, engine, "taxonomy_version", row.id)
     typer.echo(f"taxonomy version {row.version}: {row.id}", err=True)
-    typer.echo(export_yaml(content))
+    typer.echo(export_yaml(content, base_version=str(row.id)))
 
 
 def _auto_approve(
@@ -249,7 +254,10 @@ def taxonomy_show(
         decision = latest_decision(engine, "taxonomy_version", row.id)
     state = "not decided" if decision is None else f"{decision.decision} by {decision.decided_by}"
     typer.echo(f"taxonomy version {row.version} ({row.origin}): {row.id}, {state}", err=True)
-    typer.echo(export_yaml(content) if output == "yaml" else content.model_dump_json(indent=2))
+    if output == "yaml":
+        typer.echo(export_yaml(content, base_version=str(row.id)))
+    else:
+        typer.echo(content.model_dump_json(indent=2))
 
 
 @taxonomy_app.command("import")
@@ -263,10 +271,20 @@ def taxonomy_import(
     """Store an edited taxonomy as a new version (CPC codes are checked)."""
     with _session_of(config_file, env_file) as (settings, engine):
         previous_row, previous = get_taxonomy(engine, landscape_id=landscape_id)
+        text = edited_file.read_text(encoding="utf-8")
+        base = base_version_of(text)
+        if base is None:
+            raise PlrError(
+                f"{edited_file} has no '# base_version:' line; export the taxonomy with "
+                "`plr taxonomy show` and edit that file"
+            )
+        if base != str(previous_row.id):
+            raise PlrError(
+                f"{edited_file} was made from version {base}, but the newest version is "
+                f"{previous_row.id} (v{previous_row.version}); export it again so no edit is lost"
+            )
         scheme_row, scheme = open_cpc_scheme(engine, RawStore(settings.object_storage))
-        content = content_from_edit(
-            edited_file.read_text(encoding="utf-8"), scheme, previous=previous
-        )
+        content = content_from_edit(text, scheme, previous=previous)
         row = add_taxonomy_version(
             engine,
             landscape_id=landscape_id,

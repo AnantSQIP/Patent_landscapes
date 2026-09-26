@@ -202,8 +202,13 @@ def test_draft_uses_the_model_for_language_and_code_for_cpc(scheme: CpcScheme) -
     assert language.cpc == ()
     assert content.suggestions["natural_language_processing"]  # candidates stay visible
     assert {(r.kind, r.value, r.problem) for r in content.rejected} == {
-        ("term", "a (b)", "not usable as a search term (length or query syntax characters)"),
-        ("term", "x", "not usable as a search term (length or query syntax characters)"),
+        (
+            "term",
+            "a (b)",
+            "not usable as a search term: contains query-syntax characters "
+            "(quotes, brackets, wildcards, operators)",
+        ),
+        ("term", "x", "not usable as a search term: must be 2 to 80 characters"),
         ("cpc", "G06N3/02", "chosen twice"),
         ("cpc", "G06N9/99", "not in the candidate list offered to the model"),
         ("cpc", "G06N3/0455", "over the limit of 1 codes per segment"),
@@ -228,7 +233,9 @@ def test_segments_without_cpc_candidates_skip_the_selection_call(scheme: CpcSche
     assert calls == ["key1"]
     assert [s.id for s in content.spec.segments] == ["other", "other_2"]
     assert [(r.kind, r.segment_id, r.value) for r in content.rejected] == [
-        ("segment", "other", " OTHER ")
+        ("cpc_search", "other", "Other"),
+        ("cpc_search", "other_2", "Other!"),
+        ("segment", "other", " OTHER "),
     ]
 
 
@@ -305,7 +312,7 @@ def test_export_and_reimport_round_trip(scheme: CpcScheme) -> None:
 
     assert edited.spec.segments[0].cpc == ("G06N3/045",)
     assert edited.cpc["neural_network_architectures"][0].symbol == "G06N3/045"
-    assert edited.rejected == ()
+    assert edited.rejected == content.rejected  # the audit trail is carried forward
     assert content_from_edit(text, scheme, previous=content).spec == content.spec
 
 
@@ -344,3 +351,51 @@ def test_synonyms_over_the_limit_are_recorded(scheme: CpcScheme) -> None:
     assert len(content.spec.segments[0].keywords[0].synonyms) == 12
     dropped = [r.value for r in content.rejected if "over the limit of 12 synonyms" in r.problem]
     assert dropped == ["synonym 12", "synonym 13"]
+
+
+@pytest.mark.parametrize(
+    ("term", "message"),
+    [
+        (" padded", "leading or trailing spaces"),
+        ("--", "no letters or digits"),
+        ("a" * 81, "2 to 80"),
+    ],
+)
+def test_keyword_terms_are_checked(term: str, message: str) -> None:
+    from pydantic import ValidationError  # noqa: PLC0415
+
+    from patsquire_plr.landscape.taxonomy import KeywordGroup  # noqa: PLC0415
+
+    with pytest.raises(ValidationError, match=message):
+        KeywordGroup(term=term, synonyms=())
+    with pytest.raises(ValidationError, match=message):
+        KeywordGroup(term="valid term", synonyms=(term,))
+
+
+def test_edits_dedupe_codes_and_return_removed_codes_to_suggestions(scheme: CpcScheme) -> None:
+    from patsquire_plr.landscape.taxonomy import base_version_of  # noqa: PLC0415
+
+    content = _drafted(scheme)
+    text = export_yaml(content, base_version="00000000-0000-0000-0000-000000000001")
+    assert base_version_of(text) == "00000000-0000-0000-0000-000000000001"
+    assert base_version_of(export_yaml(content)) is None
+
+    doubled = content_from_edit(
+        text.replace("- G06N3/02", "- G06N3/02\n  - g06n 3/02"), scheme, previous=content
+    )
+    assert doubled.spec.segments[0].cpc == ("G06N3/02",)
+
+    removed = content_from_edit(text.replace("  - G06N3/02\n", ""), scheme, previous=content)
+    assert removed.spec.segments[0].cpc == ()
+    assert "G06N3/02" in {c.symbol for c in removed.suggestions["neural_network_architectures"]}
+
+
+def test_scope_refuses_two_kinds_of_one_publication(tmp_path: Path) -> None:
+    with pytest.raises(ScopeError, match="more than once"):
+        load_scope(
+            _write(
+                tmp_path,
+                "topic: Topic\ndate_from: 2020-01-01\ndate_to: 2021-01-01\n"
+                "seeds: [EP1234567A1, EP1234567B1]\n",
+            )
+        )

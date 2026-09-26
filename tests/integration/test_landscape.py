@@ -259,6 +259,9 @@ def test_citation_expansion_counts_and_recall(
     assert hop1.candidates == sum(hop1.excluded.values()) + hop1.requested
     hop2 = hops[2]
     assert hop2.frontier == 2  # only the records the search matches are followed
+    assert hop2.records_evaluated == (
+        hop2.frontier + hop2.frontier_undecidable + hop2.frontier_rejected
+    )
     assert hop2.excluded["already_requested"] >= 1
 
     # Running again continues the same batches instead of starting new ones.
@@ -355,24 +358,7 @@ def test_phase_5_commands(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    url = db_engine.url
-    data = base_config()
-    data["database"].update(host=url.host, port=url.port, name=url.database)
-    data["object_storage"].update(
-        endpoint_url=object_storage.endpoint_url, bucket=object_storage.bucket
-    )
-    config = tmp_path / "settings.yaml"
-    config.write_text(yaml.safe_dump(data), encoding="utf-8")
-    secrets = {
-        **base_secrets(),
-        "PLR__DATABASE__PASSWORD": TEST_DB_PASSWORD,
-        "PLR__OBJECT_STORAGE__ACCESS_KEY_ID": object_storage.access_key_id.get_secret_value(),
-        "PLR__OBJECT_STORAGE__SECRET_ACCESS_KEY": (
-            object_storage.secret_access_key.get_secret_value()
-        ),
-    }
-    for name, value in secrets.items():
-        monkeypatch.setenv(name, value)
+    config = _cli_config(db_engine, object_storage, tmp_path, monkeypatch)
 
     def plr(*args: str) -> str:
         result = CliRunner().invoke(app, [*args, "--config", str(config)])
@@ -410,6 +396,20 @@ def test_phase_5_commands(
     edited.write_text(shown.replace("- G01S7/48", "- G01S7/483"), encoding="utf-8")
     imported = plr("taxonomy", "import", landscape_id, str(edited), "--by", "Test Reviewer")
     v2 = imported.split(": ")[1].strip()
+    # The same file again is now stale (made from v1): refused so no edit is lost.
+    stale = CliRunner().invoke(
+        app, ["taxonomy", "import", landscape_id, str(edited), "--by", "X", "--config", str(config)]
+    )
+    assert stale.exit_code == 1
+    assert "was made from version" in stale.output
+    unmarked = tmp_path / "unmarked.yaml"
+    unmarked.write_text(shown.replace("# base_version:", "# was:"), encoding="utf-8")
+    missing = CliRunner().invoke(
+        app,
+        ["taxonomy", "import", landscape_id, str(unmarked), "--by", "X", "--config", str(config)],
+    )
+    assert missing.exit_code == 1
+    assert "no '# base_version:' line" in missing.output
     assert "G01S7/483" in plr("taxonomy", "show", landscape_id, "--output", "json")
     assert "approved by Test Reviewer" in plr("taxonomy", "approve", v2, "--by", "Test Reviewer")
 
@@ -515,3 +515,45 @@ def test_approvals_need_an_existing_subject(db_engine: Engine) -> None:
             decided_by="Test Reviewer",
             note=None,
         )
+
+
+def _stale_imports_are_refused(
+    config: Path, landscape_id: str, edited: Path, shown: str, tmp_path: Path
+) -> None:
+    def import_file(path: Path) -> str:
+        result = CliRunner().invoke(
+            app,
+            ["taxonomy", "import", landscape_id, str(path), "--by", "X", "--config", str(config)],
+        )
+        assert result.exit_code == 1
+        return result.output
+
+    # The same file again is now stale (made from v1): refused so no edit is lost.
+    assert "was made from version" in import_file(edited)
+    unmarked = tmp_path / "unmarked.yaml"
+    unmarked.write_text(shown.replace("# base_version:", "# was:"), encoding="utf-8")
+    assert "no '# base_version:' line" in import_file(unmarked)
+
+
+def _cli_config(
+    engine: Engine,
+    store: ObjectStorageSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    """A settings file and environment pointing the CLI at the test containers."""
+    url = engine.url
+    data = base_config()
+    data["database"].update(host=url.host, port=url.port, name=url.database)
+    data["object_storage"].update(endpoint_url=store.endpoint_url, bucket=store.bucket)
+    config = tmp_path / "settings.yaml"
+    config.write_text(yaml.safe_dump(data), encoding="utf-8")
+    secrets = {
+        **base_secrets(),
+        "PLR__DATABASE__PASSWORD": TEST_DB_PASSWORD,
+        "PLR__OBJECT_STORAGE__ACCESS_KEY_ID": store.access_key_id.get_secret_value(),
+        "PLR__OBJECT_STORAGE__SECRET_ACCESS_KEY": store.secret_access_key.get_secret_value(),
+    }
+    for name, value in secrets.items():
+        monkeypatch.setenv(name, value)
+    return config

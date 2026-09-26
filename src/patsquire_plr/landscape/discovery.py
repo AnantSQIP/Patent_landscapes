@@ -69,7 +69,9 @@ class HopReport:
     batch_id: str | None
     frontier: int
     candidates: int
+    records_evaluated: int = 0  # stored records of the previous hop checked against the search
     frontier_undecidable: int = 0  # records the search could not evaluate; not followed
+    frontier_rejected: int = 0  # records the search does not match; not followed
     excluded: Counter[str] = field(default_factory=Counter)
     requested: int = 0
     outcomes: dict[str, int] = field(default_factory=dict)
@@ -79,7 +81,9 @@ class HopReport:
             "hop": self.hop,
             "batch_id": self.batch_id,
             "frontier": self.frontier,
+            "records_evaluated": self.records_evaluated,
             "frontier_undecidable": self.frontier_undecidable,
+            "frontier_rejected": self.frontier_rejected,
             "candidates": self.candidates,
             "excluded": dict(sorted(self.excluded.items())),
             "requested": self.requested,
@@ -124,7 +128,9 @@ def expand_citations(
     )
     progress(f"hop 0 (seeds): {report.outcomes}")
     for hop in range(1, settings.max_hops + 1):
-        frontier, undecidable = _frontier(engine, batch_ids[-1], search if hop > 1 else None)
+        frontier, evaluated, undecidable = _frontier(
+            engine, batch_ids[-1], search if hop > 1 else None
+        )
         seen |= _retrieved(engine, batch_ids)
         links = _links(engine, frontier, settings.directions)
         hop_report = HopReport(
@@ -132,7 +138,9 @@ def expand_citations(
             batch_id=None,
             frontier=len(frontier),
             candidates=len(links),
+            records_evaluated=evaluated,
             frontier_undecidable=undecidable,
+            frontier_rejected=evaluated - len(frontier) - undecidable,
         )
         chosen = _choose(links, seen, scope, settings.max_fetch_per_hop, hop_report.excluded)
         if not chosen:
@@ -219,9 +227,10 @@ def _run_hop(
 
 def _frontier(
     engine: Engine, batch_id: uuid.UUID, search: Sequence[LocalMatcher] | None
-) -> tuple[list[uuid.UUID], int]:
-    """Documents stored by the batch; after hop 1 only those the search matches. Also
-    returns how many records the search could not evaluate (they are not followed)."""
+) -> tuple[list[uuid.UUID], int, int]:
+    """(frontier, records evaluated, records the search could not evaluate). The frontier is
+    every document stored by the batch at hop 1, afterwards only those the search matches;
+    evaluated = frontier + undecidable + rejected."""
     with Session(engine) as session:
         rows = session.execute(
             select(PatentDocumentRow)
@@ -233,15 +242,16 @@ def _frontier(
             for d in rows
         }
     if search is None:
-        return sorted(documents.values()), 0
+        return sorted(documents.values()), 0, 0
     matched, undecidable = [], 0
-    for record in load_match_records(engine, [batch_id]):
+    records = load_match_records(engine, [batch_id])
+    for record in records:
         outcomes = [m.evaluate(record) for m in search]
         if any(o.matched for o in outcomes):
             matched.append(documents[record.publication])
         elif any(o.undecidable for o in outcomes):
             undecidable += 1
-    return sorted(matched), undecidable
+    return sorted(matched), len(records), undecidable
 
 
 def _links(

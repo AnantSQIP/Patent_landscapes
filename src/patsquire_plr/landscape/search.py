@@ -202,7 +202,8 @@ def load_match_records(engine: Engine, batch_ids: Sequence[uuid.UUID]) -> list[M
             publication=publication,
             office=d.publication_country,
             publication_date=d.publication_date,
-            texts=tuple(t for t in (d.title, d.abstract) if t),
+            title=d.title,
+            abstract=d.abstract,
             cpc=tuple(codes.get(d.id, ())),
         )
         for publication, d in sorted(latest.items())

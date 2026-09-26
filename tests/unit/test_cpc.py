@@ -23,8 +23,9 @@ def title_list_zip(files: dict[str, str] | None = None) -> bytes:
     contents = files or {p.name: p.read_text(encoding="utf-8") for p in FIXTURES.glob("*.txt")}
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        for name, text in contents.items():
-            archive.writestr(name, text)
+        for name, text in sorted(contents.items()):
+            # A fixed timestamp keeps the archive byte-identical between calls.
+            archive.writestr(zipfile.ZipInfo(name, date_time=(2026, 8, 1, 0, 0, 0)), text)
     return buffer.getvalue()
 
 
@@ -111,7 +112,12 @@ def test_descendants_and_membership(scheme: CpcScheme) -> None:
     assert scheme.child_count("G06N3/04") > 0
     assert scheme.is_within("G06N3/0455", "G06N3/04") is True
     assert scheme.is_within("G06N3/0455", "G06F40/00") is False
-    assert scheme.is_within("G99Z1/00", "G06N3/04") is None
+    # Codes missing from the scheme are decided from their symbol only where that settles it.
+    assert scheme.is_within("G99Z1/00", "G06N3/04") is False  # another subclass
+    assert scheme.is_within("G06N5/99", "G06N3/04") is False  # another main group
+    assert scheme.is_within("G06N3/9999", "G06N3/04") is None  # same main group: unknown
+    assert scheme.is_within("G06N2003/99", "G06N3/04") is None  # its indexing mirror
+    assert scheme.is_within("G06N3/9999", "G06N") is True  # inside a queried subclass
 
 
 @pytest.mark.parametrize(
@@ -161,3 +167,28 @@ def test_indexing_codes_sit_under_their_mirror_group() -> None:
     wrong = lines.replace("A01C2001/048", "A01C2002/048")
     with pytest.raises(CpcSchemeError, match="no parent group"):
         parse_title_list(title_list_zip({"cpc-section-A_20260801.txt": wrong}))
+
+
+def test_search_terms_that_title_search_cannot_use_are_named() -> None:
+    from patsquire_plr.classification.cpc import search_term_problems  # noqa: PLC0415
+
+    assert search_term_problems(["c++", "--", "GPT-4", "Ascorbinsäure", "neural network"]) == {
+        "c++": "contains characters that CPC title search ignores",
+        "--": "has no letters or digits",
+    }
+
+
+def test_search_keeps_non_ascii_words_whole() -> None:
+    lines = (
+        "A\t\tHUMAN NECESSITIES\nA61\t\tMEDICAL\nA61K\t\tPREPARATIONS\n"
+        "A61K31/00\t0\tMedicinal preparations containing Ascorbinsäure\n"
+        "A61K31/01\t1\tContaining ure compounds\n"
+    )
+    scheme = parse_title_list(title_list_zip({"cpc-section-A_20260801.txt": lines}))
+    assert [m.symbol for m in scheme.search(["Ascorbinsäure"])] == ["A61K31/00"]
+    assert [m.symbol for m in scheme.search(["ure"])] == ["A61K31/01"]
+    assert scheme.search(["c++"]) == []  # refused, not searched as "c"
+
+
+def test_the_test_archive_is_deterministic() -> None:
+    assert title_list_zip() == title_list_zip()

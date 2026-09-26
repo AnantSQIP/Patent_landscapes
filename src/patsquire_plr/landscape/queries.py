@@ -19,9 +19,10 @@ docs/architecture/query_syntax.md. Wherever a documented form was not available,
 closest documented building block is used and the gap is listed there.
 
 The ``local`` evaluator applies the same logical query in code to records already stored
-(e.g. those found by citation expansion). Its text match is literal: whole words,
-case-insensitive, with hyphens and spaces treated alike and no stemming. Provider engines
-stem, so the same query can match slightly more there.
+(e.g. those found by citation expansion). Its text match: whole words (letters and digits
+of any script form words), case-insensitive, hyphens and spaces treated alike, and the
+final word may be plural ("s"/"es"); no other stemming. BigQuery uses the same pattern.
+Provider engines with stemming (EPO, Lens) can match slightly more.
 """
 
 from __future__ import annotations
@@ -241,15 +242,23 @@ def _check_sql_safe(query: LogicalQuery) -> None:
 
 
 def _bigquery_pattern(phrases: Sequence[str]) -> str:
-    """RE2 has no lookbehind, so boundaries are "start/end or a non-alphanumeric character",
-    the same rule as the local evaluator (terms such as "c++" match too)."""
-    return r"(?:^|[^a-z0-9])(?:" + "|".join(_phrase_regex(p) for p in phrases) + r")(?:$|[^a-z0-9])"
+    """RE2 has no lookbehind, so a boundary is "start/end, or a character that is not a
+    letter or digit" (any script) — the same rule as the local evaluator."""
+    return r"(?:^|[^\pL\pN])(?:" + "|".join(_phrase_regex(p) for p in phrases) + r")(?:$|[^\pL\pN])"
 
 
 def _phrase_regex(phrase: str) -> str:
-    """Words of a phrase, lower-cased and escaped, separated by spaces or hyphens."""
-    words = [re.escape(w) for w in re.split(r"[\s\-]+", phrase.lower().strip()) if w]
-    return r"[\s\-]+".join(words)
+    """Words of a phrase, lower-cased and escaped, separated by spaces or hyphens. A final
+    word ending in a letter also matches its plural ("language model" finds "language
+    models", "LLM" finds "LLMs"). A phrase without letters or digits is refused, since it
+    would match almost anything."""
+    words = [w for w in re.split(r"[\s\-]+", phrase.lower().strip()) if w]
+    if not any(re.search(r"[^\W_]", w) for w in words):
+        raise QueryError(f"search term {phrase!r} has no letters or digits")
+    escaped = [re.escape(w) for w in words]
+    if re.search(r"[^\W\d_]$", words[-1]):
+        escaped[-1] += "(?:s|es)?"
+    return r"[\s\-]+".join(escaped)
 
 
 # ------------------------------------------------------------------ local evaluation
@@ -262,7 +271,8 @@ class MatchRecord:
     publication: str
     office: str
     publication_date: date | None
-    texts: tuple[str, ...]  # title and abstract, matched separately (as providers do)
+    title: str | None
+    abstract: str | None  # matched separately from the title, as providers do
     cpc: tuple[str, ...]
 
 
@@ -280,9 +290,9 @@ class LocalMatcher:
         self._scheme = scheme
         self._pattern = (
             re.compile(
-                r"(?<![a-z0-9])(?:"
+                r"(?<![^\W_])(?:"
                 + "|".join(_phrase_regex(p) for p in query.phrases)
-                + r")(?![a-z0-9])"
+                + r")(?![^\W_])"
             )
             if query.phrases
             else None
@@ -307,12 +317,17 @@ class LocalMatcher:
         return self._query.date_from <= record.publication_date <= self._query.date_to, None
 
     def _text(self, record: MatchRecord) -> tuple[bool | None, str | None]:
+        """A match in either field decides; a field that is missing could have matched."""
         if self._pattern is None:
             return True, None
-        texts = [t for t in record.texts if t.strip()]
-        if not texts:
-            return None, "no title or abstract text"
-        return any(self._pattern.search(t.lower()) for t in texts), None
+        fields = {"title": record.title, "abstract": record.abstract}
+        present = {name: text for name, text in fields.items() if text and text.strip()}
+        if any(self._pattern.search(text.lower()) for text in present.values()):
+            return True, None
+        missing = [name for name in fields if name not in present]
+        if missing:
+            return None, "no " + " or ".join(missing)
+        return False, None
 
     def _codes(self, record: MatchRecord) -> tuple[bool | None, str | None]:
         if not self._query.cpc:

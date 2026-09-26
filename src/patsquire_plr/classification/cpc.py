@@ -33,7 +33,7 @@ _SECTION_FILE = re.compile(r"^cpc-section-(?P<section>[A-HY])_(?P<date>\d{8})\.t
 _SECTION = re.compile(r"^[A-HY]$")
 _CLASS = re.compile(r"^[A-HY]\d{2}$")
 _SUBCLASS = re.compile(r"^[A-HY]\d{2}[A-Z]$")
-_WORD = re.compile(r"[a-z0-9]+")
+_WORD = re.compile(r"[^\W_]+")  # letters and digits of any script
 _REFERENCE = re.compile(r"\([^()]*\)")
 
 
@@ -135,10 +135,27 @@ class CpcScheme:
         return found
 
     def is_within(self, code: str, symbol: str) -> bool | None:
-        """Whether ``code`` is ``symbol`` or below it; None if ``code`` is not in the scheme."""
-        if code not in self._entries:
+        """Whether ``code`` is ``symbol`` or below it.
+
+        A code missing from this version (retired, or newer than the scheme) is decided from
+        its symbol where that settles it: a different subclass, or a different main group, is
+        outside ``symbol``; being in a queried subclass is inside it. Otherwise the answer is
+        unknown (None), never guessed.
+        """
+        if code in self._entries:
+            return any(e.symbol == symbol for e in self.path(code))
+        target = self._entries.get(symbol)
+        code_subclass, symbol_subclass = code[:4], symbol[:4]
+        if target is not None and target.dot_level is None:  # a section, class or subclass
+            return code.startswith(symbol)
+        if code_subclass != symbol_subclass:
+            return False
+        try:
+            code_group, symbol_group = _main_group(code)[1], _main_group(symbol)[1]
+        except ValueError:
             return None
-        return any(e.symbol == symbol for e in self.path(code))
+        related = {symbol_group, symbol_group + INDEXING_OFFSET, symbol_group - INDEXING_OFFSET}
+        return None if code_group in related else False
 
     def check(self, code_raw: str) -> CpcCheck:
         try:
@@ -173,8 +190,8 @@ class CpcScheme:
         lower symbol, so the order is deterministic. ``within`` limits the search to symbols
         starting with those prefixes (e.g. subclasses ``["G06F", "G06N"]``).
         """
-        phrases = {t: _words(t) for t in terms}
-        phrases = {t: w for t, w in phrases.items() if w}
+        problems = search_term_problems(terms)
+        phrases = {t: _words(t) for t in terms if t not in problems}
         scope = [
             (symbol, entry)
             for symbol, entry in self._entries.items()
@@ -198,12 +215,25 @@ class CpcScheme:
         return matches[:limit]
 
 
+def search_term_problems(terms: Iterable[str]) -> dict[str, str]:
+    """Terms that title search cannot use as written, with the reason. Titles are compared
+    word by word, so a term whose other characters carry meaning ("c++", "A/B") or that has
+    no letters or digits would be searched as something else."""
+    problems = {}
+    for term in terms:
+        if not _words(term):
+            problems[term] = "has no letters or digits"
+        elif re.search(r"[^\w\s\-]|_", term):
+            problems[term] = "contains characters that CPC title search ignores"
+    return problems
+
+
 def _words(text: str) -> tuple[str, ...]:
-    """Lower-case words, without parenthesised references."""
+    """Case-folded words (letters and digits), without parenthesised references."""
     previous = None
     while previous != text:
         previous, text = text, _REFERENCE.sub(" ", text)
-    return tuple(_WORD.findall(text.lower()))
+    return tuple(_WORD.findall(text.casefold()))
 
 
 MIN_PLURAL_BASE = 4  # "news" is not the plural of "new"

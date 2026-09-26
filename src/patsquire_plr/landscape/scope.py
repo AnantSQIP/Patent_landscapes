@@ -62,11 +62,17 @@ class Scope(BaseModel):
             raise ValueError("countries contains repeats")
         for name in ("seeds", "known_relevant"):
             numbers: tuple[str, ...] = getattr(self, name)
-            if len(set(numbers)) != len(numbers):
-                raise ValueError(f"{name} contains repeats")
+            publications = []
             for number in numbers:
-                if normalize_publication_number(number).text != number:
+                publication = normalize_publication_number(number)
+                if publication.text != number:
                     raise ValueError(f"{name}: {number!r} is not a normalised publication number")
+                publications.append((publication.country, publication.number))
+            if len(set(publications)) != len(publications):
+                raise ValueError(
+                    f"{name} lists a publication more than once (kinds of one publication, "
+                    "such as A1 and B2, count as the same publication)"
+                )
         if self.known_relevant and not self.confirmed_by:
             raise ValueError("known_relevant needs confirmed_by (the person who confirmed them)")
         return self

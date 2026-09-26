@@ -4,6 +4,65 @@ All notable changes are recorded here. Format: [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added: Phase 5, scope, taxonomy and key strings
+- **Official CPC scheme:** the CPC Title List 2026.08 (254,314 entries) is stored
+  hash-verified and parsed exactly. It supports checking codes, title search and the
+  hierarchy (`plr cpc`).
+- **Landscapes:** scope files, taxonomy versions, approvals, query sets, query counts,
+  discovery runs and recall checks. All are append-only (migration 0007).
+- **Taxonomy drafting:** the model writes the language (segments, keywords), and code
+  finds official CPC candidates. The model may choose codes only from those candidates.
+  Rejected terms, codes and repeated segments are recorded. People edit YAML, and each
+  edit is imported as a new version.
+- **Approval gate** (`landscape.approval_mode`: human or automatic). Automatic approvals
+  are recorded as automatic.
+- **Deterministic key strings** for EPO OPS CQL, Lens JSON and BigQuery SQL, with syntax
+  sources in docs/architecture/query_syntax.md. PatentsView is skipped while its API is
+  offline.
+- **Local counts and recall** over stored records, where records that cannot be evaluated
+  make a count a lower bound.
+- **Citation expansion** from seed patents as key-less discovery. It is resumable, and
+  every excluded candidate has a reason.
+- `StructuredResult.cache_key` (provenance of model calls); read-only `batch_summary`.
+- `cli_common` / `cli_landscape` split out of `cli.py`. ADR 0010.
+- **Review fixes:**
+  * counts, recall and discovery are tied to the query set's CPC version;
+  * recall tries every kind of a publication;
+  * one boundary rule for text matching locally and in BigQuery (terms like `c++` match);
+  * title and abstract are matched separately;
+  * discovery refuses to reuse a hop batch built with other settings, and counts links
+    per publication;
+  * unknown, unfinished or empty batches are errors;
+  * approvals are stamped with `clock_timestamp()` under a lock, and the subject must
+    exist;
+  * section- and class-level codes are refused on import;
+  * dropped synonyms are recorded;
+  * control characters are refused in terms;
+  * the CPC source URL is required;
+  * 2000-series indexing codes are checked.
+- **Second audit fixes:**
+  * the final word of a term matches its plural;
+  * Unicode word boundaries;
+  * terms without letters or digits are refused;
+  * a missing abstract makes a record not evaluable instead of a silent "no";
+  * unknown CPC codes are decided from their symbol where possible;
+  * the CPC title search reports terms it cannot use;
+  * taxonomy import needs the base version (no lost edits), and a landscape's first
+    version may be written by a person.
+- **Google adapter v5:** abstracts delivered from DOCDB by the national office are official
+  text. Before this, about half of all abstracts were recorded as unparseable (on the
+  owner's patents, 659 of 1,131).
+- **`plr ingest renormalize BATCH`:** rebuilds a batch from its stored pages with the
+  current adapter; nothing is fetched. After the fix, 1,130 of the 1,131 have an abstract;
+  the one without has none on its page.
+- **Final audit fixes:**
+  * hop-1 accounting;
+  * edits re-checked under the landscape lock;
+  * unknown codes in a queried main group decided;
+  * CPC search takes any iterable.
+- **LLM landscape inputs:** CPC research in `docs/research/llm_cpc_codes.md`, a scope with
+  nine owner-confirmed patents, and a researched taxonomy (`examples/`).
+
 ### Added: user PDF folders
 - `plr ingest folder FOLDER`: publication numbers come from the file names, and a data
   source supplies the records. Each file's name, size and sha256 are recorded as batch

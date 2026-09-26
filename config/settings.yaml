@@ -40,7 +40,7 @@ models:
       api_key_env: null        # Ollama needs no key
       region: null
       max_tokens_field: max_tokens   # Ollama/vLLM accept max_tokens
-      timeout_s: 120
+      timeout_s: 900           # CPU-only inference of a 3B model can take minutes
       max_retries: 2
       requests_per_minute: 120
   roles:
@@ -49,7 +49,7 @@ models:
     bulk_classifier:
       {backend: local_ollama, model: "qwen2.5:0.5b", max_output_tokens: 512, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
     reasoner:
-      {backend: local_ollama, model: "qwen2.5:0.5b", max_output_tokens: 2048, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
+      {backend: local_ollama, model: "qwen2.5:3b", max_output_tokens: 4096, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
     writer:
       {backend: local_ollama, model: "qwen2.5:0.5b", max_output_tokens: 2048, temperature: 0, seed: 7, max_schema_retries: 2, input_price_per_mtok_usd: null, output_price_per_mtok_usd: null}
     critic:
@@ -64,3 +64,14 @@ data_sources:
     requests_per_minute: 20
     timeout_s: 30
     max_retries: 2
+
+# Landscape preparation: taxonomy and key strings (Phase 5, ADR 0010).
+landscape:
+  approval_mode: human          # human | automatic (minimum-interaction mode)
+  max_segments: 8
+  cpc_candidates_per_segment: 30   # official CPC entries offered to the model per segment
+  max_cpc_per_segment: 8
+  citation_expansion:
+    max_hops: 2
+    max_fetch_per_hop: 600      # at 20 requests/minute, about 30 minutes per full hop
+    directions: [backward, forward]

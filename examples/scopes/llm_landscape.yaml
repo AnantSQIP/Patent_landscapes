@@ -1,0 +1,30 @@
+# LLM landscape (owner-confirmed patents, 2026-09-26).
+# known_relevant: the nine patents the owner supplied as LLM patents; each was checked to
+# exist on Google Patents with the stated title and applicant.
+# seeds: the three Google patents only. The six others are held out, so the recall check
+# also measures whether citation expansion reaches them.
+topic: Large language models (LLMs)
+notes: >
+  Neural language models trained on large text corpora and the systems built on them:
+  transformer architectures, pre-training and fine-tuning, prompting and retrieval-augmented
+  generation, text generation and editing, dialogue assistants, code generation and
+  multimodal language models.
+date_from: 2017-01-01
+date_to: 2026-09-26
+countries: [US, EP, WO]
+cpc_hints: [G06N3/00, G06N20/00, G06F40/00, G06F16/00, G06F8/00]
+seeds:
+  - US10452978B2   # Attention-based sequence transduction neural networks (Google)
+  - US10740433B2   # Universal transformers (Google)
+  - US11003865B1   # Retrieval-augmented language model pre-training and fine-tuning (Google)
+known_relevant:
+  - US10452978B2
+  - US10740433B2
+  - US11003865B1
+  - US11886826B1   # Language model-based text insertion (OpenAI)
+  - US11922144B1   # Schema-based integration of external APIs with NL applications (OpenAI)
+  - US11983488B1   # Language model-based text editing (OpenAI)
+  - US12008341B2   # Natural language from language models trained on code (OpenAI)
+  - US12051205B1   # Interacting with a large language model (OpenAI)
+  - US12073180B2   # Automated analysis ... use of a large language model (Unlikely AI)
+confirmed_by: Anant (project owner), supplied in chat on 2026-09-26

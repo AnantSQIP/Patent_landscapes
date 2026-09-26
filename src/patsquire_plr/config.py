@@ -241,6 +241,25 @@ DataSourceSettings = GooglePatentsPageSettings
 _SOURCE_ID = r"^[a-z][a-z0-9_]*$"
 
 
+class CitationExpansionSettings(_Section):
+    """Key-less discovery by following citations from seed patents (ADR 0010)."""
+
+    max_hops: int = Field(ge=1, le=3)
+    max_fetch_per_hop: int = Field(ge=1, le=5000, description="politeness and cost ceiling")
+    directions: tuple[Literal["backward", "forward"], ...] = Field(min_length=1)
+
+
+class LandscapeSettings(_Section):
+    approval_mode: Literal["human", "automatic"] = Field(
+        description="human: taxonomy and queries wait for a person's approval; automatic: "
+        "minimum-interaction mode, approvals are recorded as automatic"
+    )
+    max_segments: int = Field(ge=2, le=20)
+    cpc_candidates_per_segment: int = Field(ge=5, le=100)
+    max_cpc_per_segment: int = Field(ge=1, le=30)
+    citation_expansion: CitationExpansionSettings
+
+
 class Settings(_Section):
     app: AppSettings
     database: DatabaseSettings
@@ -248,6 +267,7 @@ class Settings(_Section):
     object_storage: ObjectStorageSettings
     models: ModelsSettings
     data_sources: dict[Annotated[str, Field(pattern=_SOURCE_ID)], DataSourceSettings]
+    landscape: LandscapeSettings
 
 
 def secret_field_paths(

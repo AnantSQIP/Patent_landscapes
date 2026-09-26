@@ -1,0 +1,17 @@
+# Pilot landscape used to exercise Phase 5 without API keys.
+# The seed was checked to exist on Google Patents on 2026-09-26. It is a starting point for
+# citation expansion only; it is not confirmed as relevant by the owner (known_relevant is
+# left empty until a person confirms patents).
+topic: Large language models (LLMs)
+notes: >
+  Neural language models trained on large text corpora and the systems built on them:
+  model architectures, training and fine-tuning, inference and serving, prompting and
+  retrieval-augmented generation, and applications such as dialogue and text generation.
+date_from: 2017-01-01
+date_to: 2026-09-26
+countries: [US, EP, WO]
+cpc_hints: [G06F40/00, G06N3/00, G06N20/00, G10L15/00, G06F16/00]
+seeds:
+  - US10452978B2   # Attention-based sequence transduction neural networks (Google LLC)
+known_relevant: []
+confirmed_by: null

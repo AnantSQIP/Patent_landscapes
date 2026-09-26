@@ -87,6 +87,7 @@ class StructuredResult[T: BaseModel]:
     cached: bool
     backend: str
     model: str
+    cache_key: str  # identifies the call in llm_call / llm_cache (provenance)
 
 
 @dataclass(frozen=True)
@@ -198,7 +199,11 @@ class ModelGateway:
                 # The cached text is exactly the response that passed validation before.
                 value = output_model.model_validate_json(str(cached["json"]), strict=True)
                 return StructuredResult(
-                    value=value, cached=True, backend=role_cfg.backend, model=role_cfg.model
+                    value=value,
+                    cached=True,
+                    backend=role_cfg.backend,
+                    model=role_cfg.model,
+                    cache_key=key,
                 )
 
         messages = [Message(role="user", content=user)]
@@ -237,7 +242,11 @@ class ModelGateway:
                 response={"json": response.text},
             )
             return StructuredResult(
-                value=value, cached=False, backend=role_cfg.backend, model=role_cfg.model
+                value=value,
+                cached=False,
+                backend=role_cfg.backend,
+                model=role_cfg.model,
+                cache_key=key,
             )
         raise StructuredOutputError(
             f"role {role} ({role_cfg.backend}/{role_cfg.model}): output failed schema validation "

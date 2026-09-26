@@ -49,6 +49,17 @@ def base_config() -> dict[str, dict[str, object]]:
                 "max_retries": 1,
             }
         },
+        "landscape": {
+            "approval_mode": "human",
+            "max_segments": 8,
+            "cpc_candidates_per_segment": 30,
+            "max_cpc_per_segment": 8,
+            "citation_expansion": {
+                "max_hops": 2,
+                "max_fetch_per_hop": 50,
+                "directions": ["backward", "forward"],
+            },
+        },
     }
 
 

@@ -396,20 +396,12 @@ def test_phase_5_commands(
     edited.write_text(shown.replace("- G01S7/48", "- G01S7/483"), encoding="utf-8")
     imported = plr("taxonomy", "import", landscape_id, str(edited), "--by", "Test Reviewer")
     v2 = imported.split(": ")[1].strip()
-    # The same file again is now stale (made from v1): refused so no edit is lost.
-    stale = CliRunner().invoke(
-        app, ["taxonomy", "import", landscape_id, str(edited), "--by", "X", "--config", str(config)]
-    )
-    assert stale.exit_code == 1
-    assert "was made from version" in stale.output
-    unmarked = tmp_path / "unmarked.yaml"
-    unmarked.write_text(shown.replace("# base_version:", "# was:"), encoding="utf-8")
-    missing = CliRunner().invoke(
-        app,
-        ["taxonomy", "import", landscape_id, str(unmarked), "--by", "X", "--config", str(config)],
-    )
-    assert missing.exit_code == 1
-    assert "no '# base_version:' line" in missing.output
+    _stale_imports_are_refused(config, landscape_id, edited, shown, tmp_path)
+    # A new landscape can start from a taxonomy a person wrote (no AI draft, no base).
+    other = plr("landscape", "create", str(scope_file), "--name", "hand-written").strip()
+    written = tmp_path / "written.yaml"
+    written.write_text(shown.replace("# base_version:", "# was:"), encoding="utf-8")
+    assert "taxonomy version 1:" in plr("taxonomy", "import", other, str(written), "--by", "T")
     assert "G01S7/483" in plr("taxonomy", "show", landscape_id, "--output", "json")
     assert "approved by Test Reviewer" in plr("taxonomy", "approve", v2, "--by", "Test Reviewer")
 

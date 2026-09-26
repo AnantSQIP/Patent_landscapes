@@ -474,11 +474,12 @@ def _empty_lists_as_lists(raw: object) -> object:
 
 
 def content_from_edit(
-    text: str, scheme: CpcScheme, *, previous: TaxonomyContent
+    text: str, scheme: CpcScheme, *, previous: TaxonomyContent | None
 ) -> TaxonomyContent:
     """A person's edited YAML as a new version's content.
 
     Invalid CPC codes fail the import. Codes that normalise to the same symbol count once.
+    ``previous`` is None for a landscape whose first taxonomy is written by a person.
     Codes the person removed go back to the suggestions. Suggestions are kept only if they
     exist in ``scheme``, and the record of what was rejected earlier is carried forward.
     """
@@ -512,7 +513,7 @@ def content_from_edit(
         raise TaxonomyError("edited taxonomy has invalid CPC codes: " + "; ".join(problems))
     suggestions = {}
     for sid, codes in chosen.items():
-        pool = [*previous.suggestions.get(sid, ()), *previous.cpc.get(sid, ())]
+        pool = [*previous.suggestions.get(sid, ()), *previous.cpc.get(sid, ())] if previous else []
         kept: dict[str, ResolvedCpc] = {}
         for candidate in pool:
             check = scheme.check(candidate.symbol)
@@ -528,7 +529,7 @@ def content_from_edit(
         cpc_scheme_version=scheme.version,
         cpc=chosen,
         suggestions=suggestions,
-        rejected=previous.rejected,
+        rejected=previous.rejected if previous else (),
     )
 
 

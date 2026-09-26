@@ -40,6 +40,7 @@ from patsquire_plr.landscape.search import (
     query_set_scheme,
 )
 from patsquire_plr.landscape.store import (
+    NotFoundError,
     add_taxonomy_version,
     create_landscape,
     get_scope,
@@ -268,21 +269,16 @@ def taxonomy_import(
     config_file: ConfigFileOption = DEFAULT_CONFIG_FILE,
     env_file: EnvFileOption = None,
 ) -> None:
-    """Store an edited taxonomy as a new version (CPC codes are checked)."""
+    """Store an edited taxonomy as a new version (CPC codes are checked). The first version
+    of a landscape may also be written by a person, without an AI draft."""
     with _session_of(config_file, env_file) as (settings, engine):
-        previous_row, previous = get_taxonomy(engine, landscape_id=landscape_id)
+        get_scope(engine, landscape_id)  # the landscape must exist
         text = edited_file.read_text(encoding="utf-8")
-        base = base_version_of(text)
-        if base is None:
-            raise PlrError(
-                f"{edited_file} has no '# base_version:' line; export the taxonomy with "
-                "`plr taxonomy show` and edit that file"
-            )
-        if base != str(previous_row.id):
-            raise PlrError(
-                f"{edited_file} was made from version {base}, but the newest version is "
-                f"{previous_row.id} (v{previous_row.version}); export it again so no edit is lost"
-            )
+        try:
+            previous_row, previous = get_taxonomy(engine, landscape_id=landscape_id)
+        except NotFoundError:
+            previous_row, previous = None, None
+        _check_base_version(edited_file, base_version_of(text), previous_row)
         scheme_row, scheme = open_cpc_scheme(engine, RawStore(settings.object_storage))
         content = content_from_edit(text, scheme, previous=previous)
         row = add_taxonomy_version(
@@ -292,10 +288,30 @@ def taxonomy_import(
             origin="user_edit",
             scheme_id=scheme_row.id,
             cache_keys=[],
-            parent_id=previous_row.id,
+            parent_id=previous_row.id if previous_row else None,
             actor=by,
         )
     typer.echo(f"taxonomy version {row.version}: {row.id}")
+
+
+def _check_base_version(
+    edited_file: Path, base: str | None, newest: TaxonomyVersion | None
+) -> None:
+    """An edit must be made from the newest version, so no one's changes are lost."""
+    if newest is None:
+        if base is not None:
+            raise PlrError(f"{edited_file} names base version {base}, but the landscape has none")
+        return
+    if base is None:
+        raise PlrError(
+            f"{edited_file} has no '# base_version:' line; export the taxonomy with "
+            "`plr taxonomy show` and edit that file"
+        )
+    if base != str(newest.id):
+        raise PlrError(
+            f"{edited_file} was made from version {base}, but the newest version is "
+            f"{newest.id} (v{newest.version}); export it again so no edit is lost"
+        )
 
 
 @taxonomy_app.command("approve")
